@@ -215,7 +215,7 @@ fn agent_names_have_colors_except_on_the_highlighted_row() {
     let mut state = state();
     let terminal = screen(&mut state, 180, 30);
     let buffer = terminal.backend().buffer();
-    assert_eq!(buffer[(0, 7)].bg, Color::Rgb(163, 104, 71));
+    assert_eq!(buffer[(0, 7)].bg, Color::Rgb(202, 124, 94));
     assert_eq!(buffer[(0, 8)].fg, Color::Rgb(135, 206, 250));
     assert_eq!(buffer[(8, 8)].fg, Color::Reset);
 }
