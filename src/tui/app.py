@@ -1,8 +1,8 @@
 """Main TUI application loop.
 
-Manages curses setup/teardown, state (mode, cursor, selection),
-input dispatch, and the render loop. Coordinates left pane, right
-pane, and status bar renderers.
+Manages curses setup/teardown, state (mode, cursor, selection, agent
+filter), input dispatch, and the render loop. Coordinates filter bar,
+left pane, right pane, and status bar renderers.
 """
 
 from __future__ import annotations
@@ -11,16 +11,11 @@ import curses
 import os
 import sys
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
-from src.data import (
-    Session,
-    delete_session_files,
-    delete_sessions_from_history,
-    load_session_detail,
-    load_sessions,
-)
-from src.tui import left_pane, right_pane, status_bar
+from src.data import Session
+from src.data.agents import PROVIDERS, load_all_sessions
+from src.tui import filter_bar, left_pane, right_pane, status_bar
 
 # Mode constants
 MODE_SELECT = "SELECT"
@@ -47,20 +42,50 @@ _BANNER = [
 ]
 _BANNER_HEIGHT = len(_BANNER) + 1  # +1 for blank line after banner
 
+# Keys 1-4 toggle the agents, in PROVIDERS order
+_FILTER_KEYS: Dict[int, str] = {ord(str(number)): agent for number, agent in enumerate(PROVIDERS, start=1)}
+
 
 class _State:
-    """Mutable state container for the TUI."""
+    """Mutable state container for the TUI.
+
+    `all_sessions` holds every loaded session; `sessions` holds only the
+    sessions of the agents enabled in `agent_filter`. The cursor and the
+    selection refer to `sessions`.
+    """
 
     def __init__(self, sessions: List[Session]) -> None:
-        self.sessions = sessions
+        self.all_sessions = sessions
+        self.agent_filter: Set[str] = set(PROVIDERS)
+        self.sessions: List[Session] = list(sessions)
         self.mode = MODE_SELECT
         self.cursor = 0
         self.scroll_offset = 0
-        self.selected: Set[str] = set()
+        # Session keys: (agent, session_id)
+        self.selected: Set[Tuple[str, str]] = set()
         self.message: Optional[str] = None
         self.confirming = False
         # Track which session was last enriched to avoid re-reading
-        self._enriched_id: Optional[str] = None
+        self._enriched_key: Optional[Tuple[str, str]] = None
+
+
+def _apply_filter(state: _State) -> None:
+    """Rebuild the visible session list from the agent filter.
+
+    Clamps the cursor and drops hidden sessions from the selection, so a
+    session that is not visible can never be deleted.
+    """
+    state.sessions = [s for s in state.all_sessions if s.agent in state.agent_filter]
+    visible_keys = {s.key for s in state.sessions}
+    state.selected &= visible_keys
+    state.cursor = min(state.cursor, max(0, len(state.sessions) - 1))
+    state.scroll_offset = 0
+
+
+def _toggle_agent(state: _State, agent: str) -> None:
+    """Show or hide the sessions of one agent."""
+    state.agent_filter ^= {agent}
+    _apply_filter(state)
 
 
 def _init_colors() -> None:
@@ -139,7 +164,7 @@ def _render(stdscr: curses.window, state: _State) -> None:
     stdscr.erase()
     max_y, max_x = stdscr.getmaxyx()
 
-    if max_y < 3 or max_x < 20:
+    if max_y < 4 or max_x < 20:
         # Terminal too small
         try:
             stdscr.addstr(0, 0, "Terminal too small")
@@ -149,28 +174,33 @@ def _render(stdscr: curses.window, state: _State) -> None:
         curses.doupdate()
         return
 
-    # Layout: banner at top, status bar at bottom, panes in between
+    # Layout: banner at top, agent filter bar, panes, status bar at bottom
     # Hide banner if terminal is too short
     show_banner = max_y > _BANNER_HEIGHT + 5
     banner_h = _BANNER_HEIGHT if show_banner else 0
-    content_y = banner_h
+    filter_y = banner_h
+    content_y = banner_h + 1
     status_y = max_y - 1
-    pane_height = max_y - 1 - banner_h
+    pane_height = max_y - 2 - banner_h
 
     # Draw banner
     if show_banner:
         _draw_banner(stdscr, max_x)
 
-    # Empty state
+    # Draw agent filter bar
+    agent_labels = {agent: provider.label for agent, provider in PROVIDERS.items()}
+    filter_bar.draw(stdscr, agent_labels, state.agent_filter, _PAIR_NORMAL, max_x, filter_y)
+
+    # Empty state (no sessions, or all hidden by the filter)
     if not state.sessions:
         try:
-            msg = "No Claude Code sessions found."
+            msg = "No sessions found."
             msg_y = content_y + pane_height // 2
             stdscr.addstr(msg_y, max(0, (max_x - len(msg)) // 2), msg)
         except curses.error:
             pass
         status_bar.draw(stdscr, state.mode, _accent_pair(state.mode),
-                        max_x, status_y, message=" Q: Quit")
+                        max_x, status_y, message=" 1-4: Filter  |  Q: Quit")
         stdscr.noutrefresh()
         curses.doupdate()
         return
@@ -190,9 +220,9 @@ def _render(stdscr: curses.window, state: _State) -> None:
 
     # Enrich the highlighted session lazily (for right pane detail)
     current_session = state.sessions[state.cursor]
-    if state._enriched_id != current_session.session_id:
-        load_session_detail(current_session)
-        state._enriched_id = current_session.session_id
+    if state._enriched_key != current_session.key:
+        PROVIDERS[current_session.agent].load_detail(current_session)
+        state._enriched_key = current_session.key
 
     # Draw left pane
     left_pane.draw(
@@ -250,11 +280,18 @@ def _handle_delete_key(key: int, state: _State, stdscr: curses.window) -> Option
             state.cursor += 1
     elif key == ord("\t"):
         # Toggle selection on current session
-        sid = state.sessions[state.cursor].session_id
-        if sid in state.selected:
-            state.selected.discard(sid)
+        session_key = state.sessions[state.cursor].key
+        if session_key in state.selected:
+            state.selected.discard(session_key)
         else:
-            state.selected.add(sid)
+            state.selected.add(session_key)
+    elif key in (ord("A"), ord("a")):
+        # Select all visible sessions, or clear the selection if all are selected
+        visible_keys = {s.key for s in state.sessions}
+        if state.selected == visible_keys:
+            state.selected.clear()
+        else:
+            state.selected = visible_keys
     elif key in (ord("S"), ord("s")):
         state.mode = MODE_SELECT
         state.selected.clear()
@@ -279,38 +316,39 @@ def _do_launch(state: _State, stdscr: curses.window) -> bool:
         state.message = f"Error: Directory '{session.project_path}' no longer exists."
         return False
 
+    argv = PROVIDERS[session.agent].resume_command(session)
+
     # Must restore terminal before exec
     curses.endwin()
     os.chdir(project_dir)
-    os.execvp("claude", ["claude", "--resume", session.session_id])
+    os.execvp(argv[0], argv)
     # If execvp returns (shouldn't happen), we can't continue the TUI
     return True
 
 
 def _do_delete(state: _State) -> None:
-    """Delete all selected sessions and refresh the list."""
-    count = len(state.selected)
+    """Delete all selected sessions, agent by agent, and refresh the list."""
+    selected_sessions = [s for s in state.sessions if s.key in state.selected]
 
-    # Remove from history.jsonl
-    delete_sessions_from_history(state.selected)
-
-    # Delete files for each session
-    for session in state.sessions:
-        if session.session_id in state.selected:
-            delete_session_files(session.session_id)
+    errors: List[str] = []
+    for agent, provider in PROVIDERS.items():
+        agent_sessions = [s for s in selected_sessions if s.agent == agent]
+        if agent_sessions:
+            errors.extend(provider.delete_sessions(agent_sessions))
 
     # Refresh sessions
-    state.sessions = load_sessions()
+    state.all_sessions = load_all_sessions()
     state.selected.clear()
     state.mode = MODE_SELECT
-    state._enriched_id = None
+    state._enriched_key = None
+    _apply_filter(state)
 
-    # Fix cursor position
-    if state.cursor >= len(state.sessions):
-        state.cursor = max(0, len(state.sessions) - 1)
-    state.scroll_offset = 0
-
-    state.message = f"Deleted {count} session(s)."
+    # Count what is really gone: a failed delete leaves the session listed
+    remaining_keys = {s.key for s in state.all_sessions}
+    deleted_count = sum(1 for s in selected_sessions if s.key not in remaining_keys)
+    state.message = f"Deleted {deleted_count} session(s)."
+    if errors:
+        state.message += f" {len(errors)} error(s): {errors[0]}"
 
 
 def _main(stdscr: curses.window) -> None:
@@ -321,7 +359,7 @@ def _main(stdscr: curses.window) -> None:
     stdscr.timeout(100)  # 100ms timeout for responsive resize handling
     _init_colors()
 
-    sessions = load_sessions()
+    sessions = load_all_sessions()
     state = _State(sessions)
 
     while True:
@@ -353,6 +391,11 @@ def _main(stdscr: curses.window) -> None:
 
         # Clear transient messages on any keypress
         state.message = None
+
+        # Agent filter keys work in both modes, even when no session is visible
+        if key in _FILTER_KEYS:
+            _toggle_agent(state, _FILTER_KEYS[key])
+            continue
 
         if not state.sessions:
             # Only Q works in empty state

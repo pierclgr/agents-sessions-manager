@@ -12,8 +12,10 @@ from typing import Optional
 
 
 # Key hint strings per mode
-_SELECT_HINTS = " MODE: SELECT  |  \u2191/\u2193 Navigate  |  Enter: Resume session  |  D: Delete mode  |  Q: Quit"
-_DELETE_HINTS = " MODE: DELETE  |  \u2191/\u2193 Navigate  |  Tab: Toggle select  |  Enter: Delete selected  |  S: Select mode  |  Q: Quit"
+_SELECT_HINTS = (" MODE: SELECT  |  \u2191/\u2193 Navigate  |  1-4: Filter  |  Enter: Resume session"
+                 "  |  D: Delete mode  |  Q: Quit")
+_DELETE_HINTS = (" MODE: DELETE  |  \u2191/\u2193 Navigate  |  1-4: Filter  |  Tab: Toggle select  |  A: Select all"
+                 "  |  Enter: Delete selected  |  S: Select mode  |  Q: Quit")
 
 
 def draw(stdscr: curses.window, mode: str, accent_pair: int, width: int, y: int,

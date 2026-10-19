@@ -1,7 +1,8 @@
 """Right pane renderer for the TUI.
 
-Draws session details: project path, full session ID, latest commands,
-and todos. Updates reactively when the cursor moves.
+Draws session details: agent, project path, session name (if any), full
+session ID, latest commands, and todos. Updates reactively when the
+cursor moves.
 """
 
 from __future__ import annotations
@@ -56,10 +57,21 @@ def draw(stdscr: curses.window, session: Session, pair: int,
         while row < max_row:
             _line()
 
+    # Section: Agent
+    _line("Agent:")
+    _line(f"  {session.agent}")
+    _line()
+
     # Section: Project
     _line("Project:")
     _line(f"  {session.project_path}")
     _line()
+
+    # Section: Name (only for named sessions)
+    if session.name:
+        _line("Name:")
+        _line(f"  {session.name}")
+        _line()
 
     # Section: Session ID
     _line("Session ID:")
