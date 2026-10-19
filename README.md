@@ -1,4 +1,4 @@
-# Claude Code Sessions Manager
+# Agents Sessions Manager
 
 A terminal tool for browsing, resuming, and deleting coding agent sessions across all your projects. Supported agents: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), [OpenCode](https://opencode.ai) and [Pi](https://github.com/earendil-works/pi-mono). Provides both an interactive full-screen TUI and non-interactive CLI subcommands.
 
@@ -29,18 +29,18 @@ Built with **Python 3.8+** using only the standard library (zero third-party dep
 
 ```bash
 # Clone the repository
-git clone https://github.com/pierclgr/claude-code-sessions-manager.git
-cd claude-code-sessions-manager
+git clone https://github.com/pierclgr/agents-sessions-manager.git
+cd agents-sessions-manager
 
 # Make the entry point executable
-chmod +x claude-code-sessions
+chmod +x agents-sessions
 ```
 
-Optionally, add the directory to your `PATH` so you can run `claude-code-sessions` from anywhere:
+Optionally, add the directory to your `PATH` so you can run `agents-sessions` from anywhere:
 
 ```bash
 # Add to your shell profile (~/.bashrc, ~/.zshrc, etc.)
-export PATH="/path/to/claude-code-sessions-manager:$PATH"
+export PATH="/path/to/agents-sessions-manager:$PATH"
 ```
 
 ## Usage
@@ -48,7 +48,7 @@ export PATH="/path/to/claude-code-sessions-manager:$PATH"
 ### Interactive TUI
 
 ```bash
-claude-code-sessions
+agents-sessions
 ```
 
 Launches the full-screen session browser in SELECT mode.
@@ -102,16 +102,16 @@ Launches the full-screen session browser in SELECT mode.
 
 ```bash
 # List the sessions of all agents (tab-separated, suitable for piping)
-claude-code-sessions ls
+agents-sessions ls
 
 # Resume a session of any agent by ID (supports prefix matching)
-claude-code-sessions launch <SESSION_ID>
+agents-sessions launch <SESSION_ID>
 
 # Delete a session of any agent by ID (with confirmation prompt)
-claude-code-sessions delete <SESSION_ID>
+agents-sessions delete <SESSION_ID>
 
 # Show help
-claude-code-sessions --help
+agents-sessions --help
 ```
 
 #### `ls` output example
@@ -125,8 +125,8 @@ codex     01a154ad                  /Users/you/other-project  Fix the bug in… 
 ## Project Structure
 
 ```
-claude-code-sessions-manager/
-├── claude-code-sessions           # Bash entry point (routes subcommands to Python)
+agents-sessions-manager/
+├── agents-sessions                # Bash entry point (routes subcommands to Python)
 ├── src/
 │   ├── commands/                  # Non-interactive subcommand handlers
 │   │   ├── ls.py                  #   List sessions

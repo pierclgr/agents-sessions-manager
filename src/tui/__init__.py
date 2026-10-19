@@ -1,1 +1,1 @@
-"""Full-screen terminal UI for Claude Code Sessions Manager."""
+"""Full-screen terminal UI for Agents Sessions Manager."""

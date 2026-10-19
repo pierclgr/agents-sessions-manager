@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Main entry point for Claude Code Sessions Manager (Claude Code, Codex, OpenCode, Pi).
+# Main entry point for Agents Sessions Manager (Claude Code, Codex, OpenCode, Pi).
 # Routes subcommands to the appropriate Python handler.
 
 set -euo pipefail
@@ -10,9 +10,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Print usage information
 show_help() {
     cat <<'EOF'
-Usage: claude-code-sessions [COMMAND] [OPTIONS]
+Usage: agents-sessions [COMMAND] [OPTIONS]
 
-Claude Code Session Manager - Browse, resume, and delete coding agent sessions.
+Agents Sessions Manager - Browse, resume, and delete coding agent sessions.
 Supported agents: Claude Code, Codex, OpenCode, Pi.
 
 Commands:
@@ -25,10 +25,10 @@ Options:
   -h, --help          Show this help message and exit
 
 Examples:
-  claude-code-sessions                    # Open interactive browser
-  claude-code-sessions ls                 # List all sessions
-  claude-code-sessions launch abc123      # Resume session abc123
-  claude-code-sessions delete abc123      # Delete session abc123
+  agents-sessions                         # Open interactive browser
+  agents-sessions ls                      # List all sessions
+  agents-sessions launch abc123           # Resume session abc123
+  agents-sessions delete abc123           # Delete session abc123
 EOF
 }
 
@@ -44,7 +44,7 @@ case "${1:-}" in
     launch)
         if [[ -z "${2:-}" ]]; then
             echo "Error: 'launch' requires a session ID argument." >&2
-            echo "Usage: claude-code-sessions launch <SESSION_ID>" >&2
+            echo "Usage: agents-sessions launch <SESSION_ID>" >&2
             exit 1
         fi
         PYTHONPATH="$SCRIPT_DIR" python3 -m src.commands.launch "$2"
@@ -52,7 +52,7 @@ case "${1:-}" in
     delete)
         if [[ -z "${2:-}" ]]; then
             echo "Error: 'delete' requires a session ID argument." >&2
-            echo "Usage: claude-code-sessions delete <SESSION_ID>" >&2
+            echo "Usage: agents-sessions delete <SESSION_ID>" >&2
             exit 1
         fi
         PYTHONPATH="$SCRIPT_DIR" python3 -m src.commands.delete "$2"
@@ -63,7 +63,7 @@ case "${1:-}" in
         ;;
     *)
         echo "Error: Unknown command '$1'." >&2
-        echo "Run 'claude-code-sessions --help' for usage information." >&2
+        echo "Run 'agents-sessions --help' for usage information." >&2
         exit 1
         ;;
 esac
