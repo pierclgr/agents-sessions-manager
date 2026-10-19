@@ -4,8 +4,16 @@
 
 set -euo pipefail
 
-# Resolve the directory where this script lives
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Follow installed links so Python modules are loaded from the repository.
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [[ -L "$SCRIPT_PATH" ]]; do
+    SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+    SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+    if [[ "$SCRIPT_PATH" != /* ]]; then
+        SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+    fi
+done
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 
 # Print usage information
 show_help() {

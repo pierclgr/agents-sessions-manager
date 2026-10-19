@@ -12,7 +12,7 @@ Built with **Python 3.8+** using only the standard library (zero third-party dep
 - **DELETE mode** -- Batch-select sessions (or select all of them) and delete them with all their data
 - **Agent filter** -- Show or hide the sessions of each agent with keys `1`-`4`, in both modes
 - **Agent colors** -- Each agent name has its own color in the list and in the filter bar: Claude orange, Codex light blue, OpenCode light green, Pi light magenta (red, cyan, green and magenta when the terminal cannot define custom colors)
-- **Session names** -- Shows the name you gave to a session; sessions without a name show their ID
+- **Session names** -- Shows the name of a session, either the one you set (e.g. `/rename`) or the one the agent generated; sessions without a name show their ID
 - **CLI subcommands** -- Non-interactive `ls`, `launch`, and `delete` commands for scripting and quick access
 - **Cross-project view** -- Aggregates sessions from every project into a single list, sorted by most recent activity
 - **Lazy detail loading** -- Per-session data (todos, commands) is loaded only when highlighted, keeping startup fast
@@ -33,16 +33,21 @@ Built with **Python 3.8+** using only the standard library (zero third-party dep
 git clone https://github.com/pierclgr/agents-sessions-manager.git
 cd agents-sessions-manager
 
-# Make the entry point executable
-chmod +x agents-sessions
+# Install both command names
+./setup.sh
 ```
 
-Optionally, add the directory to your `PATH` so you can run `agents-sessions` from anywhere:
+Setup installs `agents-sessions` and its alias `sessions` in `~/.local/bin`, linked to this repository. Both commands work from any directory and accept the same subcommands. No `sudo` is needed. Keep the repository in place; updates to it apply to both commands.
+
+Setup can be run again and refuses to overwrite unrelated files. Python 3.8+ with curses support must already be installed.
+
+If the install directory is not in your `PATH`, setup prints the line to add to your shell profile (`~/.zshrc` or `~/.bashrc`). Run that line in your current shell too. For the default location:
 
 ```bash
-# Add to your shell profile (~/.bashrc, ~/.zshrc, etc.)
-export PATH="/path/to/agents-sessions-manager:$PATH"
+export PATH="$HOME/.local/bin:$PATH"
 ```
+
+To use a different install directory, pass it to setup: `./setup.sh /path/to/bin`.
 
 ## Usage
 
@@ -53,6 +58,8 @@ agents-sessions
 ```
 
 Launches the full-screen session browser in SELECT mode.
+
+SELECT mode uses a muted orange (`#A36847`) accent with white text (gray when custom colors are unavailable), distinct from Claude's orange. DELETE mode keeps its dark reddish accent.
 
 #### TUI Layout
 
@@ -84,7 +91,7 @@ Launches the full-screen session browser in SELECT mode.
 | `1` - `4`        | Show/hide Claude, Codex, OpenCode, Pi sessions |
 | `Enter`          | Resume the highlighted session |
 | `D`              | Switch to DELETE mode          |
-| `Q`              | Quit                          |
+| `Esc` / `Q`      | Quit                          |
 
 #### DELETE mode
 
@@ -93,11 +100,14 @@ Launches the full-screen session browser in SELECT mode.
 | `Up` / `k`       | Move cursor up                       |
 | `Down` / `j`     | Move cursor down                     |
 | `1` - `4`        | Show/hide Claude, Codex, OpenCode, Pi sessions (hidden sessions are unselected) |
-| `Tab`            | Toggle selection on current session  |
+| `Tab` / `Space`  | Toggle selection on current session  |
+| `Shift+Tab`      | Select all sessions from the last one toggled with `Tab`/`Space` to the cursor |
 | `A`              | Select all shown sessions (press again to clear the selection) |
-| `Enter`          | Delete selected sessions (with confirmation) |
-| `S`              | Switch back to SELECT mode           |
-| `Q`              | Quit                                 |
+| `Enter`          | Delete selected sessions (with confirmation; `Esc` cancels) |
+| `D`              | Switch back to SELECT mode           |
+| `Esc` / `Q`      | Quit                                 |
+
+Both `q` and `Q` work. During delete confirmation, `Esc` and `Q` cancel the prompt.
 
 ### CLI Subcommands
 
@@ -128,6 +138,7 @@ codex     01a154ad                  /Users/you/other-project  Fix the bug in… 
 ```
 agents-sessions-manager/
 ├── agents-sessions                # Bash entry point (routes subcommands to Python)
+├── setup.sh                       # Installs agents-sessions and sessions
 ├── src/
 │   ├── commands/                  # Non-interactive subcommand handlers
 │   │   ├── ls.py                  #   List sessions
@@ -175,7 +186,7 @@ Each agent has a provider (`src/data/agents/`) that loads, deletes and resumes i
 
 | Agent | Sessions source | Name | Resume | Delete |
 | ----- | --------------- | ---- | ------ | ------ |
-| Claude Code | `~/.claude/history.jsonl`, grouped by `sessionId` | `/rename` title in `~/.claude/projects/<slug>/<id>.jsonl` | `claude --resume <ID>` | see below |
+| Claude Code | `~/.claude/history.jsonl`, grouped by `sessionId` | `/rename` title, otherwise the generated title, in `~/.claude/projects/<slug>/<id>.jsonl` | `claude --resume <ID>` | see below |
 | Codex | `threads` table of `~/.codex/state_<N>.sqlite`, prompts from `~/.codex/history.jsonl` | `name` column | `codex resume <ID>` | `codex delete --force <ID>`, then the session's lines are removed from `~/.codex/history.jsonl` |
 | OpenCode | `session_v2` and `session_message` tables of `~/.local/share/opencode/opencode.db` | session title (except the default `New session - <date>`) | `opencode --session <ID>` | `opencode session delete <ID>` (also deletes child sessions and messages) |
 | Pi | `~/.pi/agent/sessions/--<path>--/<timestamp>_<ID>.jsonl` | `/name` (`session_info` entry) | `pi --session <file>` | the session file (and its project folder, if empty) |

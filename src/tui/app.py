@@ -22,7 +22,7 @@ MODE_SELECT = "SELECT"
 MODE_DELETE = "DELETE"
 
 # Accent colors (R, G, B)
-_SELECT_COLOR = (202, 124, 94)
+_SELECT_COLOR = (163, 104, 71)  # muted orange (#A36847)
 _DELETE_COLOR = (55, 6, 3)
 
 # Color pair IDs
@@ -33,9 +33,9 @@ _PAIR_DIVIDER_SELECT = 4
 _PAIR_DIVIDER_DELETE = 5
 _PAIR_MARKER = 6
 
-# Agent colors (R, G, B), in PROVIDERS order. Claude keeps the SELECT accent orange
+# Agent colors (R, G, B), in PROVIDERS order
 _AGENT_COLORS: Dict[str, Tuple[int, int, int]] = {
-    "claude": _SELECT_COLOR,
+    "claude": (202, 124, 94),     # orange
     "codex": (135, 206, 250),     # light blue
     "opencode": (144, 238, 144),  # light green
     "pi": (255, 128, 255),        # light magenta
@@ -43,7 +43,7 @@ _AGENT_COLORS: Dict[str, Tuple[int, int, int]] = {
 
 # Built-in colors used when the terminal cannot define custom colors
 _AGENT_FALLBACK_COLORS: Dict[str, int] = {
-    "claude": curses.COLOR_RED,  # same as the SELECT accent fallback
+    "claude": curses.COLOR_RED,  # closest built-in color to orange
     "codex": curses.COLOR_CYAN,
     "opencode": curses.COLOR_GREEN,
     "pi": curses.COLOR_MAGENTA,
@@ -57,6 +57,10 @@ _AGENT_PAIRS: Dict[str, int] = {
 # Custom color IDs for the agents, after the IDs 20-22 used by _init_colors
 _AGENT_FIRST_COLOR_ID = 23
 
+# Built-in "bright black" provides a muted gray fallback on 16-color terminals
+_FALLBACK_GREY = 8
+_MIN_COLORS_FOR_GREY = 16
+
 # ASCII art banner (small figlet font, sans-serif)
 _BANNER = [
     "   _   ___ ___ _  _ _____ ___   ___ ___ ___ ___ ___ ___  _  _ ___   __  __   _   _  _   _   ___ ___ ___ ",
@@ -65,6 +69,11 @@ _BANNER = [
     "/_/ \\_\\___|___|_|\\_| |_| |___/ |___/___|___/___/___\\___/|_|\\_|___/ |_|  |_/_/ \\_\\_|\\_/_/ \\_\\___|___|_|_\\",
 ]
 _BANNER_HEIGHT = len(_BANNER) + 1  # +1 for blank line after banner
+
+# Esc quits the tool
+_KEY_ESC = 27
+# Milliseconds curses waits after Esc for the rest of an escape sequence
+_ESC_DELAY_MS = 25
 
 # Keys 1-4 toggle the agents, in PROVIDERS order
 _FILTER_KEYS: Dict[int, str] = {ord(str(number)): agent for number, agent in enumerate(PROVIDERS, start=1)}
@@ -87,6 +96,8 @@ class _State:
         self.scroll_offset = 0
         # Session keys: (agent, session_id)
         self.selected: Set[Tuple[str, str]] = set()
+        # Key of the last session toggled with Tab/Space: start of a Shift+Tab range
+        self.range_anchor: Optional[Tuple[str, str]] = None
         self.message: Optional[str] = None
         self.confirming = False
         # Track which session was last enriched to avoid re-reading
@@ -141,10 +152,15 @@ def _init_colors() -> None:
             curses.init_pair(_AGENT_PAIRS[agent], color_id, -1)
     else:
         # Fallback: use built-in colors
-        curses.init_pair(_PAIR_SELECT_ACCENT, curses.COLOR_WHITE, curses.COLOR_RED)
+        # Use gray for the muted accent; 8-color terminals need black text on white
+        if curses.COLORS >= _MIN_COLORS_FOR_GREY:
+            grey, text_on_grey = _FALLBACK_GREY, curses.COLOR_WHITE
+        else:
+            grey, text_on_grey = curses.COLOR_WHITE, curses.COLOR_BLACK
+        curses.init_pair(_PAIR_SELECT_ACCENT, text_on_grey, grey)
         curses.init_pair(_PAIR_DELETE_ACCENT, curses.COLOR_WHITE, curses.COLOR_RED)
         curses.init_pair(_PAIR_NORMAL, -1, -1)
-        curses.init_pair(_PAIR_DIVIDER_SELECT, curses.COLOR_RED, -1)
+        curses.init_pair(_PAIR_DIVIDER_SELECT, grey, -1)
         curses.init_pair(_PAIR_DIVIDER_DELETE, curses.COLOR_RED, -1)
         curses.init_pair(_PAIR_MARKER, curses.COLOR_RED, -1)
         for agent, color in _AGENT_FALLBACK_COLORS.items():
@@ -232,7 +248,7 @@ def _render(stdscr: curses.window, state: _State) -> None:
         except curses.error:
             pass
         status_bar.draw(stdscr, state.mode, _accent_pair(state.mode),
-                        max_x, status_y, message=" 1-4: Filter  |  Q: Quit")
+                        max_x, status_y, message=" 1-4: Filter  |  ESC/Q: Quit")
         stdscr.noutrefresh()
         curses.doupdate()
         return
@@ -286,7 +302,7 @@ def _render(stdscr: curses.window, state: _State) -> None:
 
 
 def _handle_select_key(key: int, state: _State, stdscr: curses.window) -> Optional[str]:
-    """Handle keypress in SELECT mode. Returns 'quit' or 'launch' or None."""
+    """Handle keypress in SELECT mode. Returns 'launch' or None."""
     if key in (curses.KEY_UP, ord("k")):
         if state.cursor > 0:
             state.cursor -= 1
@@ -296,28 +312,37 @@ def _handle_select_key(key: int, state: _State, stdscr: curses.window) -> Option
     elif key in (ord("D"), ord("d")):
         state.mode = MODE_DELETE
         state.message = None
-    elif key in (ord("Q"), ord("q")):
-        return "quit"
     elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
         return "launch"
     return None
 
 
-def _handle_delete_key(key: int, state: _State, stdscr: curses.window) -> Optional[str]:
-    """Handle keypress in DELETE mode. Returns 'quit' or None."""
+def _handle_delete_key(key: int, state: _State, stdscr: curses.window) -> None:
+    """Handle keypress in DELETE mode."""
     if key in (curses.KEY_UP, ord("k")):
         if state.cursor > 0:
             state.cursor -= 1
     elif key in (curses.KEY_DOWN, ord("j")):
         if state.cursor < len(state.sessions) - 1:
             state.cursor += 1
-    elif key == ord("\t"):
-        # Toggle selection on current session
+    elif key in (ord("\t"), ord(" ")):
+        # Toggle selection on current session; it becomes the start of a Shift+Tab range
         session_key = state.sessions[state.cursor].key
         if session_key in state.selected:
             state.selected.discard(session_key)
         else:
             state.selected.add(session_key)
+        state.range_anchor = session_key
+    elif key == curses.KEY_BTAB:
+        # Shift+Tab: select every session from the last toggled one to the cursor (both
+        # included). Without a visible range start, only the current session is selected
+        visible_keys = [s.key for s in state.sessions]
+        if state.range_anchor in visible_keys:
+            anchor_index = visible_keys.index(state.range_anchor)
+        else:
+            anchor_index = state.cursor
+        first, last = sorted((anchor_index, state.cursor))
+        state.selected.update(visible_keys[first:last + 1])
     elif key in (ord("A"), ord("a")):
         # Select all visible sessions, or clear the selection if all are selected
         visible_keys = {s.key for s in state.sessions}
@@ -325,19 +350,18 @@ def _handle_delete_key(key: int, state: _State, stdscr: curses.window) -> Option
             state.selected.clear()
         else:
             state.selected = visible_keys
-    elif key in (ord("S"), ord("s")):
+    elif key in (ord("D"), ord("d")):
+        # D toggles back to SELECT mode
         state.mode = MODE_SELECT
         state.selected.clear()
+        state.range_anchor = None
         state.message = None
-    elif key in (ord("Q"), ord("q")):
-        return "quit"
     elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
         if not state.selected:
             state.message = "No sessions selected."
         else:
             state.confirming = True
             state.message = f"Delete {len(state.selected)} session(s)? [y/N]"
-    return None
 
 
 def _do_launch(state: _State, stdscr: curses.window) -> bool:
@@ -372,6 +396,7 @@ def _do_delete(state: _State) -> None:
     # Refresh sessions
     state.all_sessions = load_all_sessions()
     state.selected.clear()
+    state.range_anchor = None
     state.mode = MODE_SELECT
     state._enriched_key = None
     _apply_filter(state)
@@ -430,26 +455,28 @@ def _main(stdscr: curses.window) -> None:
             _toggle_agent(state, _FILTER_KEYS[key])
             continue
 
+        # Esc and Q quit in both modes (during confirmation they only cancel, see above)
+        if key in (_KEY_ESC, ord("q"), ord("Q")):
+            break
+
         if not state.sessions:
-            # Only Q works in empty state
-            if key in (ord("Q"), ord("q")):
-                break
+            # Only filter keys, Esc and Q work in empty state
             continue
 
         if state.mode == MODE_SELECT:
             action = _handle_select_key(key, state, stdscr)
-            if action == "quit":
-                break
-            elif action == "launch":
+            if action == "launch":
                 _do_launch(state, stdscr)
         elif state.mode == MODE_DELETE:
-            action = _handle_delete_key(key, state, stdscr)
-            if action == "quit":
-                break
+            _handle_delete_key(key, state, stdscr)
 
 
 def run() -> None:
     """Entry point for the TUI. Sets up curses and runs the main loop."""
+    # By default curses waits 1 s after Esc to tell it apart from escape
+    # sequences (e.g. arrow keys); a short delay makes Esc quit at once.
+    # Set before curses starts; a user-defined ESCDELAY is kept.
+    os.environ.setdefault("ESCDELAY", str(_ESC_DELAY_MS))
     # Ensure stderr is available for delete logging even under curses
     curses.wrapper(_main)
 

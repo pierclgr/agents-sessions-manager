@@ -37,10 +37,13 @@ class ClaudeProviderTest(unittest.TestCase):
             {"type": "custom-title", "customTitle": "old-name", "sessionId": SID_NAMED},
             {"type": "ai-title", "aiTitle": "Auto title", "sessionId": SID_NAMED},
             {"type": "custom-title", "customTitle": "new-name", "sessionId": SID_NAMED},
+            # a /rename title wins over a later AI title
+            {"type": "ai-title", "aiTitle": "Newer auto title", "sessionId": SID_NAMED},
             {"type": "user", "todos": [{"content": "write tests"}]},
         ])
-        # the AI title alone is not a user-set name
+        # without /rename, the latest AI title is the name
         write_jsonl(self.root / "projects" / SLUG / f"{SID_PLAIN}.jsonl", [
+            {"type": "ai-title", "aiTitle": "Old auto title", "sessionId": SID_PLAIN},
             {"type": "ai-title", "aiTitle": "Auto title", "sessionId": SID_PLAIN},
         ])
 
@@ -53,7 +56,7 @@ class ClaudeProviderTest(unittest.TestCase):
         self.assertEqual(named.name, "new-name")
         self.assertEqual(named.commands, ["first", "second"])
         self.assertEqual(named.latest_command, "second")
-        self.assertIsNone(sessions[SID_PLAIN].name)
+        self.assertEqual(sessions[SID_PLAIN].name, "Auto title")
 
     def test_load_detail_reads_todos_for_path_with_special_chars(self) -> None:
         provider = ClaudeProvider()
