@@ -195,9 +195,11 @@ impl State {
                     .iter()
                     .map(|index| self.all_sessions[*index].key())
                     .collect();
+                // only a selected anchor starts a range
                 let anchor = self
                     .range_anchor
                     .as_ref()
+                    .filter(|anchor| self.selected.contains(*anchor))
                     .and_then(|anchor| keys.iter().position(|key| key == anchor))
                     .unwrap_or(self.cursor);
                 let first = anchor.min(self.cursor);

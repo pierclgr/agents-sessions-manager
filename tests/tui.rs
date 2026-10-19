@@ -61,6 +61,18 @@ fn select_all_toggles_only_visible_sessions() {
 }
 
 #[test]
+fn deselected_anchor_is_ignored_by_range_select() {
+    let mut state = state();
+    key(&mut state, KeyCode::Char('d'));
+    key(&mut state, KeyCode::Tab);
+    key(&mut state, KeyCode::Tab);
+    key(&mut state, KeyCode::Down);
+    key(&mut state, KeyCode::Down);
+    key(&mut state, KeyCode::BackTab);
+    assert_eq!(state.selected.len(), 1);
+}
+
+#[test]
 fn tab_and_space_toggle_and_set_range_anchor() {
     let mut state = state();
     key(&mut state, KeyCode::Char('d'));
