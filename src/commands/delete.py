@@ -54,7 +54,7 @@ def run(session_id: str) -> None:
     delete_sessions_from_history({match.session_id})
 
     # Delete session files and directories
-    delete_session_files(match.project_path, match.session_id)
+    delete_session_files(match.session_id)
 
     print(f"Session '{match.session_id}' deleted.")
 

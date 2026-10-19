@@ -297,7 +297,7 @@ def _do_delete(state: _State) -> None:
     # Delete files for each session
     for session in state.sessions:
         if session.session_id in state.selected:
-            delete_session_files(session.project_path, session.session_id)
+            delete_session_files(session.session_id)
 
     # Refresh sessions
     state.sessions = load_sessions()

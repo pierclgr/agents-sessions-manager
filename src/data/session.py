@@ -7,7 +7,7 @@ import sys
 from typing import List
 
 from src.data.models import Session
-from src.utils.paths import get_session_jsonl_path
+from src.utils.paths import find_session_jsonl
 
 
 def load_session_detail(session: Session) -> Session:
@@ -16,9 +16,9 @@ def load_session_detail(session: Session) -> Session:
     Returns the same Session object (mutated).
     If the file doesn't exist or can't be read, returns session unchanged.
     """
-    path = get_session_jsonl_path(session.project_path, session.session_id)
+    path = find_session_jsonl(session.session_id)
 
-    if not path.exists():
+    if path is None:
         return session
 
     try:

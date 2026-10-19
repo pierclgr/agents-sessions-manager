@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Optional
 
 DEFAULT_CLAUDE_DIR = Path.home() / ".claude"
 HISTORY_FILE = "history.jsonl"
@@ -22,12 +23,20 @@ def get_history_path() -> Path:
     return get_claude_dir() / HISTORY_FILE
 
 
-def project_path_to_slug(project_path: str) -> str:
-    """Convert '/Users/foo/bar' to '-Users-foo-bar'."""
-    return project_path.replace("/", "-")
+def find_session_jsonl(session_id: str, claude_dir: Optional[Path] = None) -> Optional[Path]:
+    """Find the per-session transcript <claude_dir>/projects/<slug>/<session_id>.jsonl.
 
+    The project folder name (slug) is not computed from the project path:
+    Claude Code replaces every non-alphanumeric char and shortens long paths,
+    so searching by session ID is the only reliable way.
 
-def get_session_jsonl_path(project_path: str, session_id: str) -> Path:
-    """Return path: <claude_dir>/projects/<slug>/<session_id>.jsonl"""
-    slug = project_path_to_slug(project_path)
-    return get_claude_dir() / "projects" / slug / f"{session_id}.jsonl"
+    Args:
+        session_id: The session UUID.
+        claude_dir: Optional override for the Claude data directory.
+
+    Returns:
+        Path of the transcript, or None if it does not exist.
+    """
+    root = claude_dir if claude_dir is not None else get_claude_dir()
+    matches = sorted((root / "projects").glob(f"*/{session_id}.jsonl"))
+    return matches[0] if matches else None
