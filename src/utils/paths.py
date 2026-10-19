@@ -48,3 +48,10 @@ def get_codex_dir() -> Path:
     if env:
         return Path(env)
     return Path.home() / ".codex"
+
+
+def get_opencode_db_path() -> Path:
+    """Return OpenCode database path. Honors XDG_DATA_HOME, defaults to ~/.local/share/opencode/opencode.db."""
+    env = os.environ.get("XDG_DATA_HOME")
+    data_dir = Path(env) if env else Path.home() / ".local" / "share"
+    return data_dir / "opencode" / "opencode.db"
