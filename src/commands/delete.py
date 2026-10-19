@@ -1,24 +1,24 @@
 """Handler for the 'delete' subcommand.
 
-Looks up a session by ID, asks for confirmation, then removes all its
-data from history.jsonl and the filesystem.
+Looks up a session by ID across all agents, asks for confirmation, then
+removes all its data with the agent's provider.
 """
 
 from __future__ import annotations
 
 import sys
 
-from src.data import delete_session_files, delete_sessions_from_history, load_sessions
+from src.data.agents import PROVIDERS, load_all_sessions
 from src.utils.formatting import format_datetime, truncate
 
 
 def run(session_id: str) -> None:
-    """Delete a Claude Code session and all its data.
+    """Delete a session of any agent and all its data.
 
     Args:
         session_id: Full or partial session UUID to look up.
     """
-    sessions = load_sessions()
+    sessions = load_all_sessions()
 
     # Find matching session (exact or prefix match)
     match = None
@@ -32,6 +32,9 @@ def run(session_id: str) -> None:
         sys.exit(1)
 
     # Show session info and ask for confirmation
+    print(f"  Agent:       {match.agent}")
+    if match.name:
+        print(f"  Name:        {match.name}")
     print(f"  Session ID:  {match.session_id}")
     print(f"  Project:     {match.project_path}")
     print(f"  Created:     {format_datetime(match.created_at)}")
@@ -50,11 +53,12 @@ def run(session_id: str) -> None:
         print("Aborted.")
         sys.exit(0)
 
-    # Remove from history.jsonl (atomic rewrite)
-    delete_sessions_from_history({match.session_id})
-
-    # Delete session files and directories
-    delete_session_files(match.session_id)
+    # Delete all session data with the agent's own rules
+    errors = PROVIDERS[match.agent].delete_sessions([match])
+    if errors:
+        for error in errors:
+            print(f"Error: {error}", file=sys.stderr)
+        sys.exit(1)
 
     print(f"Session '{match.session_id}' deleted.")
 

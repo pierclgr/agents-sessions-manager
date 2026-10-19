@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Main entry point for Claude Code Sessions Manager.
+# Main entry point for Claude Code Sessions Manager (Claude Code, Codex, OpenCode, Pi).
 # Routes subcommands to the appropriate Python handler.
 
 set -euo pipefail
@@ -12,13 +12,14 @@ show_help() {
     cat <<'EOF'
 Usage: claude-code-sessions [COMMAND] [OPTIONS]
 
-Claude Code Session Manager - Browse, resume, and delete Claude Code sessions.
+Claude Code Session Manager - Browse, resume, and delete coding agent sessions.
+Supported agents: Claude Code, Codex, OpenCode, Pi.
 
 Commands:
   (none)              Launch the interactive session browser
-  ls                  List all sessions in a compact format
-  launch <ID>         Resume a session by its ID
-  delete <ID>         Delete a session and all its data
+  ls                  List the sessions of all agents in a compact format
+  launch <ID>         Resume a session by its ID (any agent)
+  delete <ID>         Delete a session and all its data (any agent)
 
 Options:
   -h, --help          Show this help message and exit

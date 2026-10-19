@@ -8,24 +8,26 @@ from __future__ import annotations
 
 import sys
 
-from src.data import load_sessions
+from src.data.agents import load_all_sessions
 from src.utils.formatting import format_datetime, truncate
 
 
 def run() -> None:
-    """Print all sessions as an aligned table to stdout."""
-    sessions = load_sessions()
+    """Print the sessions of all agents as an aligned table to stdout."""
+    sessions = load_all_sessions()
 
     if not sessions:
         print("No sessions found.", file=sys.stderr)
         return
 
-    headers = ["Session ID", "Project Directory", "Last message", "Created", "Last Modified"]
+    headers = ["Agent", "Session ID", "Name", "Project Directory", "Last message", "Created", "Last Modified"]
 
     rows = []
     for session in sessions:
         rows.append([
+            session.agent,
             session.session_id[:8],
+            session.name or "",
             session.project_path,
             truncate(session.latest_command.strip(), 50),
             format_datetime(session.created_at),
