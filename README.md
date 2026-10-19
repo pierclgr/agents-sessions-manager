@@ -2,11 +2,12 @@
 
 A terminal tool for browsing, resuming, and deleting coding agent sessions across all your projects. Supported agents: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), [OpenCode](https://opencode.ai) and [Pi](https://github.com/earendil-works/pi-mono). Provides both an interactive full-screen TUI and non-interactive CLI subcommands.
 
-Built with **Python 3.8+** using only the standard library (zero third-party dependencies). Works on **macOS** and **Linux**.
+Built with **Rust**, using Ratatui and Crossterm for the terminal interface.
+Works on **macOS** and **Linux**. SQLite is bundled into the executable.
 
 ## Features
 
-- **Interactive TUI** -- Full-screen curses interface with two-pane layout: session list on the left, session details on the right
+- **Interactive TUI** -- Full-screen terminal interface with two-pane layout: session list on the left, session details on the right
 - **Multi-agent** -- Shows the sessions of Claude Code, Codex, OpenCode and Pi in one list, and resumes each one with its own agent
 - **SELECT mode** -- Browse all sessions and resume any of them with a single keystroke
 - **DELETE mode** -- Batch-select sessions (or select all of them) and delete them with all their data
@@ -20,8 +21,9 @@ Built with **Python 3.8+** using only the standard library (zero third-party dep
 
 ## Prerequisites
 
-- **Bash** 4.0+
-- **Python** 3.8+
+- **Rust and Cargo**, stable toolchain, to build and install
+- A **C compiler** (`cc`) to build bundled SQLite
+- **Bash** to run the installer
 - At least one supported agent installed: **Claude Code**, **Codex**, **OpenCode** or **Pi**
 - To delete Codex and OpenCode sessions, their CLI (`codex`, `opencode`) must be on your `PATH`
 - A terminal with ANSI color support (24-bit true-color preferred; 256-color fallback available)
@@ -37,9 +39,20 @@ cd agents-sessions-manager
 ./setup.sh
 ```
 
-Setup installs `agents-sessions` and its alias `sessions` in `~/.local/bin`, linked to this repository. Both commands work from any directory and accept the same subcommands. No `sudo` is needed. Keep the repository in place; updates to it apply to both commands.
+Install [Rust and Cargo](https://rustup.rs) before running setup. On macOS,
+the C compiler comes with the Xcode Command Line Tools (`xcode-select --install`).
+On Linux, install your distribution's C build tools.
 
-Setup can be run again and refuses to overwrite unrelated files. Python 3.8+ with curses support must already be installed.
+Setup builds a release executable using the versions in `Cargo.lock`. It
+installs `agents-sessions` and its alias `sessions` in `~/.local/bin`. Both
+commands work from any directory and accept the same subcommands. No `sudo`
+is needed. The installed commands work after you move or remove the checkout.
+Running them does not require Rust, Cargo, or Bash.
+
+Run setup again after updating the source. It updates its own installation
+and refuses to overwrite unrelated or modified files. A small checksum record
+(`.agents-sessions-install`) identifies the executable installed by setup.
+Links created by the previous installer for this checkout can be upgraded.
 
 If the install directory is not in your `PATH`, setup prints the line to add to your shell profile (`~/.zshrc` or `~/.bashrc`). Run that line in your current shell too. For the default location:
 
@@ -137,36 +150,22 @@ codex     01a154ad                  /Users/you/other-project  Fix the bug in… 
 
 ```
 agents-sessions-manager/
-├── agents-sessions                # Bash entry point (routes subcommands to Python)
-├── setup.sh                       # Installs agents-sessions and sessions
+├── Cargo.toml                     # Package and library dependencies
+├── Cargo.lock                     # Locked dependency versions
+├── setup.sh                       # Builds and installs both commands
 ├── src/
-│   ├── commands/                  # Non-interactive subcommand handlers
-│   │   ├── ls.py                  #   List sessions
-│   │   ├── launch.py              #   Resume a session
-│   │   └── delete.py              #   Delete a session
-│   ├── data/                      # Data access layer
-│   │   ├── models.py              #   Session dataclass
-│   │   ├── history.py             #   Parse Claude history.jsonl
-│   │   ├── session.py             #   Parse Claude per-session JSONL (name, todos)
-│   │   ├── delete.py              #   Claude deletion operations
-│   │   └── agents/                #   One provider per agent (load, delete, resume)
-│   │       ├── base.py            #     AgentProvider interface + CLI runner
-│   │       ├── claude.py          #     Claude Code
-│   │       ├── codex.py           #     Codex
-│   │       ├── opencode.py        #     OpenCode
-│   │       └── pi.py              #     Pi
-│   ├── tui/                       # Full-screen curses TUI
-│   │   ├── app.py                 #   Main loop, state management, colors
-│   │   ├── filter_bar.py          #   Agent filter bar renderer
-│   │   ├── left_pane.py           #   Scrollable session list renderer
-│   │   ├── right_pane.py          #   Session detail renderer
-│   │   └── status_bar.py          #   Mode indicator + keybindings bar
-│   └── utils/                     # Shared utilities
-│       ├── paths.py               #   Agent data directory / path resolution
-│       ├── formatting.py          #   Date/time formatting, text truncation
-│       ├── jsonl.py               #   Atomic removal of JSONL lines
-│       └── sqlite.py              #   Read-only SQLite queries
-├── tests/                         # Unit tests (unittest)
+│   ├── main.rs                    # Executable entry point
+│   ├── lib.rs                     # Shared application modules
+│   ├── commands.rs                # CLI routing, listing, resume, confirmation
+│   ├── data.rs                    # Session types and data-directory overrides
+│   ├── data/
+│   │   ├── agents.rs              # Provider interface and registry
+│   │   ├── agents/                # Claude, Codex, OpenCode, and Pi providers
+│   │   └── delete.rs              # Claude artifact and shared-file cleanup
+│   ├── tui.rs                     # State, rendering, input, terminal lifecycle
+│   └── utils.rs                   # Formatting, files, SQLite, command runner
+├── tests/                         # Rust tests with isolated agent data
+├── .github/workflows/ci.yml        # macOS and Linux checks
 └── README.md                      # This file
 ```
 
@@ -191,7 +190,10 @@ Each agent has a provider (`src/data/agents/`) that loads, deletes and resumes i
 | OpenCode | `session_v2` and `session_message` tables of `~/.local/share/opencode/opencode.db` | session title (except the default `New session - <date>`) | `opencode --session <ID>` | `opencode session delete <ID>` (also deletes child sessions and messages) |
 | Pi | `~/.pi/agent/sessions/--<path>--/<timestamp>_<ID>.jsonl` | `/name` (`session_info` entry) | `pi --session <file>` | the session file (and its project folder, if empty) |
 
-All resume commands run from the session's project directory, via `os.execvp`. When a session is highlighted in the TUI, Claude's per-session JSONL file is parsed to extract todos.
+All resume commands replace the current process from the session's project
+directory, using Unix `exec`. The terminal is restored before the agent starts.
+When a session is highlighted in the TUI, Claude's per-session JSONL file is
+parsed to extract todos.
 
 **Claude Code session deletion** removes:
 
@@ -204,10 +206,49 @@ Background sessions (started with `claude --bg`) are first removed with `claude 
 
 ## Running Tests
 
-The tests use only the standard library (`unittest`) and build fake agent data in temporary directories:
+The tests build fake agent data in temporary directories. Agent commands are
+replaced with test commands. Terminal tests use a pseudo-terminal and verify
+that terminal settings are restored after quitting, cancellation, and launch.
 
 ```bash
-python3 -m unittest discover -s tests -t .
+cargo test --locked
+```
+
+Run the same checks as CI:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
+cargo build --release --locked
+```
+
+To run from the checkout without installing:
+
+```bash
+cargo run -- ls
+```
+
+### Conventions
+
+Use `rustfmt`, typed session and agent models, and small modules with clear
+responsibilities. Pass data paths and command runners into the data layer.
+Keep state changes separate from terminal I/O. Tests must use temporary data
+and must not read or delete real sessions.
+
+Use snake_case for source files and UPPER_SNAKE_CASE for documentation names.
+Start code comments with a lowercase letter and omit the ending period.
+
+Build output is stored in `target/` and is not committed. Keep `Cargo.lock`
+committed so installation and CI use the same dependency versions.
+
+## Updating
+
+From a checkout, update the source and run the installer again:
+
+```bash
+git pull
+./setup.sh
 ```
 
 ## Disclaimer

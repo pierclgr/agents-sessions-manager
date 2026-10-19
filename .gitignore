@@ -13,8 +13,8 @@ SPECS.md
 # JetBrains
 .idea/
 
-# Python
-__pycache__/
+# Rust build output
+/target/
 
 # git worktrees
 .worktrees/
