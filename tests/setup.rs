@@ -65,7 +65,8 @@ cp "$TEST_EXECUTABLE" "$prefix/bin/agents-sessions"
             .arg(&self.bin)
             .current_dir(&self.cwd)
             .env("PATH", path)
-            .env("TEST_EXECUTABLE", env!("CARGO_BIN_EXE_agents-sessions"));
+            .env("TEST_EXECUTABLE", env!("CARGO_BIN_EXE_agents-sessions"))
+            .env("HOME", self._temporary.path());
         command
     }
 

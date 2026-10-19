@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build and install both command names without changing shell profiles
+# build and install both command names, then add their directory to PATH
 
 set -euo pipefail
 
@@ -104,10 +104,94 @@ mv -f "$STAGE/new-metadata" "$METADATA"
 COMMITTED=1
 
 printf 'Installed agents-sessions and sessions in %s.\n' "$BIN_DIR"
-case ":$PATH:" in
-    *":$BIN_DIR:"*) ;;
+
+SHELL_NAME="${SHELL:-}"
+SHELL_NAME="${SHELL_NAME##*/}"
+printf -v PATH_ENTRY 'export PATH=%q:"$PATH"' "$BIN_DIR"
+PROFILE_ADDED=0
+PROFILE_EXISTS=0
+PROFILE_FAILED=0
+PROFILE_SOURCE_FILE=""
+
+add_path_entry() {
+    local profile="$1"
+
+    if [[ -f "$profile" ]] && grep -Fqx -- "$PATH_ENTRY" "$profile"; then
+        return 1
+    fi
+    if [[ -e "$profile" || -L "$profile" ]]; then
+        if ! [[ -f "$profile" ]]; then
+            return 2
+        fi
+        if ! grep -Fq -- "$BIN_DIR" "$profile"; then
+            if { if [[ -s "$profile" ]]; then printf '\n'; fi; printf '%s\n' "$PATH_ENTRY"; } >> "$profile" 2>/dev/null; then
+                return 0
+            fi
+            return 2
+        fi
+        return 1
+    fi
+    if printf '%s\n' "$PATH_ENTRY" > "$profile" 2>/dev/null; then
+        return 0
+    fi
+    return 2
+}
+
+record_path_entry() {
+    local profile="$1"
+    local status=0
+    add_path_entry "$profile" || status=$?
+    case "$status" in
+        0)
+            PROFILE_ADDED=1
+            PROFILE_SOURCE_FILE="$profile"
+            printf 'Added the install directory to %s.\n' "$profile"
+            ;;
+        1)
+            PROFILE_EXISTS=1
+            PROFILE_SOURCE_FILE="$profile"
+            ;;
+        *)
+            PROFILE_FAILED=1
+            ;;
+    esac
+}
+
+case "$SHELL_NAME" in
+    zsh)
+        SHELL_RC_DIR="${ZDOTDIR:-$HOME}"
+        record_path_entry "$SHELL_RC_DIR/.zshrc"
+        ;;
+    bash)
+        BASH_LOGIN_PROFILE="$HOME/.profile"
+        for candidate in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+            if [[ -f "$candidate" ]]; then
+                BASH_LOGIN_PROFILE="$candidate"
+                break
+            fi
+        done
+        if [[ -n "$BASH_LOGIN_PROFILE" ]] && grep -Eq '(^|[[:space:]])(\.|source)[[:space:]][^#]*\.bashrc' "$BASH_LOGIN_PROFILE"; then
+            record_path_entry "$HOME/.bashrc"
+        else
+            if [[ -n "$BASH_LOGIN_PROFILE" ]]; then
+                record_path_entry "$HOME/.bashrc"
+            fi
+            record_path_entry "$BASH_LOGIN_PROFILE"
+        fi
+        ;;
     *)
-        printf '\nAdd this line to your shell profile and run it in your current shell:\n'
-        printf 'export PATH=%q:"$PATH"\n' "$BIN_DIR"
+        PROFILE_FAILED=1
         ;;
 esac
+
+if [[ "$PROFILE_ADDED" == 1 && "$PROFILE_FAILED" == 0 ]]; then
+    printf 'Run `source %q` or open a new terminal to use the commands.\n' "$PROFILE_SOURCE_FILE"
+elif [[ "$PROFILE_ADDED" == 1 ]]; then
+    printf 'Added the install directory to %s.\n' "$PROFILE_SOURCE_FILE"
+    printf 'Add this line to any shell startup file that setup could not update:\n%s\n' "$PATH_ENTRY"
+elif [[ "$PROFILE_EXISTS" == 1 && "$PROFILE_FAILED" == 0 ]]; then
+    printf 'The install directory is already in %s. Run `source %q` or open a new terminal.\n' "$PROFILE_SOURCE_FILE" "$PROFILE_SOURCE_FILE"
+else
+    printf '\nAdd this line to your shell profile to put the install directory on PATH:\n'
+    printf '%s\n' "$PATH_ENTRY"
+fi

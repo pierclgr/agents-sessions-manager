@@ -49,12 +49,18 @@ commands work from any directory and accept the same subcommands. No `sudo`
 is needed. The installed commands work after you move or remove the checkout.
 Running them does not require Rust, Cargo, or Bash.
 
+Setup adds the install directory to a detected zsh or Bash startup file when
+it is missing. It updates `.zshrc` (respecting `ZDOTDIR`) or the appropriate
+Bash startup file. If the shell is not recognized or the file cannot be
+updated, setup prints the line to add manually. Open a new terminal or source
+the updated file to use the commands in the current session.
+
 Run setup again after updating the source. It updates its own installation
 and refuses to overwrite unrelated or modified files. A small checksum record
 (`.agents-sessions-install`) identifies the executable installed by setup.
 Links created by the previous installer for this checkout can be upgraded.
 
-If the install directory is not in your `PATH`, setup prints the line to add to your shell profile (`~/.zshrc` or `~/.bashrc`). Run that line in your current shell too. For the default location:
+For the default install directory, the PATH entry looks like this:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
