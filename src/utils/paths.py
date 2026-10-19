@@ -55,3 +55,12 @@ def get_opencode_db_path() -> Path:
     env = os.environ.get("XDG_DATA_HOME")
     data_dir = Path(env) if env else Path.home() / ".local" / "share"
     return data_dir / "opencode" / "opencode.db"
+
+
+def get_pi_sessions_dir() -> Path:
+    """Return Pi sessions dir. Honors PI_CODING_AGENT_SESSION_DIR, then PI_CODING_AGENT_DIR/sessions, defaults to ~/.pi/agent/sessions/."""
+    env = os.environ.get("PI_CODING_AGENT_SESSION_DIR")
+    if env:
+        return Path(env)
+    agent_dir = os.environ.get("PI_CODING_AGENT_DIR")
+    return (Path(agent_dir) if agent_dir else Path.home() / ".pi" / "agent") / "sessions"

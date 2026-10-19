@@ -79,6 +79,8 @@ class PiProviderTest(unittest.TestCase):
 
         self.assertEqual(errors, [])
         self.assertFalse(self.named_file.exists())
+        # it was the only session of the project: the folder is removed too
+        self.assertFalse(self.named_file.parent.exists())
 
     def test_delete_missing_file_returns_error(self) -> None:
         session = next(s for s in PiProvider().load_sessions() if s.session_id == U_NAMED)

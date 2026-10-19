@@ -8,12 +8,13 @@ from src.data.agents.base import AgentProvider
 from src.data.agents.claude import ClaudeProvider
 from src.data.agents.codex import CodexProvider
 from src.data.agents.opencode import OpenCodeProvider
+from src.data.agents.pi import PiProvider
 from src.data.models import Session
 
 # Order matters: it sets the filter keys 1-4 in the TUI
 PROVIDERS: Dict[str, AgentProvider] = {
     provider.key: provider
-    for provider in (ClaudeProvider(), CodexProvider(), OpenCodeProvider())
+    for provider in (ClaudeProvider(), CodexProvider(), OpenCodeProvider(), PiProvider())
 }
 
 
