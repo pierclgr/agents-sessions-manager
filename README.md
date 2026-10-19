@@ -11,6 +11,7 @@ Built with **Python 3.8+** using only the standard library (zero third-party dep
 - **SELECT mode** -- Browse all sessions and resume any of them with a single keystroke
 - **DELETE mode** -- Batch-select sessions (or select all of them) and delete them with all their data
 - **Agent filter** -- Show or hide the sessions of each agent with keys `1`-`4`, in both modes
+- **Agent colors** -- Each agent name has its own color in the list and in the filter bar: Claude orange, Codex light blue, OpenCode light green, Pi light magenta (red, cyan, green and magenta when the terminal cannot define custom colors)
 - **Session names** -- Shows the name you gave to a session; sessions without a name show their ID
 - **CLI subcommands** -- Non-interactive `ls`, `launch`, and `delete` commands for scripting and quick access
 - **Cross-project view** -- Aggregates sessions from every project into a single list, sorted by most recent activity
