@@ -33,6 +33,30 @@ _PAIR_DIVIDER_SELECT = 4
 _PAIR_DIVIDER_DELETE = 5
 _PAIR_MARKER = 6
 
+# Agent colors (R, G, B), in PROVIDERS order. Claude keeps the SELECT accent orange
+_AGENT_COLORS: Dict[str, Tuple[int, int, int]] = {
+    "claude": _SELECT_COLOR,
+    "codex": (135, 206, 250),     # light blue
+    "opencode": (144, 238, 144),  # light green
+    "pi": (255, 128, 255),        # light magenta
+}
+
+# Built-in colors used when the terminal cannot define custom colors
+_AGENT_FALLBACK_COLORS: Dict[str, int] = {
+    "claude": curses.COLOR_RED,  # same as the SELECT accent fallback
+    "codex": curses.COLOR_CYAN,
+    "opencode": curses.COLOR_GREEN,
+    "pi": curses.COLOR_MAGENTA,
+}
+
+# One color pair per agent, after the fixed pairs above
+_AGENT_PAIRS: Dict[str, int] = {
+    agent: _PAIR_MARKER + number for number, agent in enumerate(_AGENT_COLORS, start=1)
+}
+
+# Custom color IDs for the agents, after the IDs 20-22 used by _init_colors
+_AGENT_FIRST_COLOR_ID = 23
+
 # ASCII art banner (small figlet font, sans-serif)
 _BANNER = [
     "   _   ___ ___ _  _ _____ ___   ___ ___ ___ ___ ___ ___  _  _ ___   __  __   _   _  _   _   ___ ___ ___ ",
@@ -109,6 +133,12 @@ def _init_colors() -> None:
         curses.init_pair(_PAIR_DIVIDER_SELECT, 20, -1)   # select accent fg, default bg
         curses.init_pair(_PAIR_DIVIDER_DELETE, 21, -1)    # delete accent fg, default bg
         curses.init_pair(_PAIR_MARKER, 21, -1)           # delete accent fg for markers
+
+        # Agent colors: agent fg, default bg
+        for offset, (agent, rgb) in enumerate(_AGENT_COLORS.items()):
+            color_id = _AGENT_FIRST_COLOR_ID + offset
+            _set(color_id, *rgb)
+            curses.init_pair(_AGENT_PAIRS[agent], color_id, -1)
     else:
         # Fallback: use built-in colors
         curses.init_pair(_PAIR_SELECT_ACCENT, curses.COLOR_WHITE, curses.COLOR_RED)
@@ -117,6 +147,8 @@ def _init_colors() -> None:
         curses.init_pair(_PAIR_DIVIDER_SELECT, curses.COLOR_RED, -1)
         curses.init_pair(_PAIR_DIVIDER_DELETE, curses.COLOR_RED, -1)
         curses.init_pair(_PAIR_MARKER, curses.COLOR_RED, -1)
+        for agent, color in _AGENT_FALLBACK_COLORS.items():
+            curses.init_pair(_AGENT_PAIRS[agent], color, -1)
 
 
 def _accent_pair(mode: str) -> int:
@@ -189,7 +221,7 @@ def _render(stdscr: curses.window, state: _State) -> None:
 
     # Draw agent filter bar
     agent_labels = {agent: provider.label for agent, provider in PROVIDERS.items()}
-    filter_bar.draw(stdscr, agent_labels, state.agent_filter, _PAIR_NORMAL, max_x, filter_y)
+    filter_bar.draw(stdscr, agent_labels, state.agent_filter, _PAIR_NORMAL, _AGENT_PAIRS, max_x, filter_y)
 
     # Empty state (no sessions, or all hidden by the filter)
     if not state.sessions:
@@ -231,6 +263,7 @@ def _render(stdscr: curses.window, state: _State) -> None:
         accent_pair=_accent_pair(state.mode),
         normal_pair=_PAIR_NORMAL,
         marker_pair=_PAIR_MARKER,
+        agent_pairs=_AGENT_PAIRS,
         x=0, y=content_y, width=left_width, height=pane_height,
     )
 

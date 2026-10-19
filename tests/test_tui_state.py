@@ -1,10 +1,19 @@
-"""Tests for the TUI state: agent filter and select all."""
+"""Tests for the TUI state: agent filter, select all and agent colors."""
 
 from __future__ import annotations
 
 import unittest
 
-from src.tui.app import MODE_DELETE, _handle_delete_key, _State, _toggle_agent
+from src.data.agents import PROVIDERS
+from src.tui.app import (
+    _AGENT_COLORS,
+    _AGENT_FALLBACK_COLORS,
+    _AGENT_PAIRS,
+    MODE_DELETE,
+    _handle_delete_key,
+    _State,
+    _toggle_agent,
+)
 from tests.helpers import make_session
 
 
@@ -55,6 +64,12 @@ class TuiStateTest(unittest.TestCase):
 
         _handle_delete_key(ord("a"), self.state, None)
         self.assertEqual(self.state.selected, set())
+
+    def test_every_agent_has_a_color(self) -> None:
+        self.assertEqual(list(_AGENT_COLORS), list(PROVIDERS))
+        self.assertEqual(list(_AGENT_FALLBACK_COLORS), list(PROVIDERS))
+        # one distinct color pair per agent
+        self.assertEqual(len(set(_AGENT_PAIRS.values())), len(PROVIDERS))
 
 
 if __name__ == "__main__":

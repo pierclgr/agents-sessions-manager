@@ -3,14 +3,15 @@
 Draws a flat, scrollable session list occupying the left ~60% of the
 terminal. Each row shows agent, project directory, session name (or ID
 when there is no name), last modified date, and latest command. The
-highlighted row uses the mode accent color.
+agent name uses the agent color. The highlighted row uses the mode
+accent color.
 In DELETE mode, rows are prefixed with [x] / [ ] selection markers.
 """
 
 from __future__ import annotations
 
 import curses
-from typing import List, Set, Tuple
+from typing import Dict, List, Set, Tuple
 
 from src.data.models import Session
 from src.utils.formatting import format_datetime, truncate
@@ -22,6 +23,7 @@ _NAME_MAX = 24
 def draw(stdscr: curses.window, sessions: List[Session], cursor: int,
          scroll_offset: int, mode: str, selected: Set[Tuple[str, str]],
          accent_pair: int, normal_pair: int, marker_pair: int,
+         agent_pairs: Dict[str, int],
          x: int, y: int, width: int, height: int) -> None:
     """Render the session list in the left pane area.
 
@@ -35,6 +37,8 @@ def draw(stdscr: curses.window, sessions: List[Session], cursor: int,
         accent_pair: Color pair for the highlighted cursor row.
         normal_pair: Color pair for normal rows.
         marker_pair: Color pair for the [x] marker in DELETE mode.
+        agent_pairs: Agent key -> color pair for the agent name (not used
+            on the highlighted row, which keeps the accent color).
         x: Starting column of the pane.
         y: Starting row of the pane.
         width: Width of the pane in columns.
@@ -138,5 +142,10 @@ def draw(stdscr: curses.window, sessions: List[Session], cursor: int,
                 stdscr.addstr(screen_y, x + marker_width, line, attr)
             else:
                 stdscr.addstr(screen_y, x, line, attr)
+
+            # Redraw the agent name in the agent color (first column of the line)
+            if not is_cursor:
+                stdscr.addstr(screen_y, x + marker_width, line[:len(agent)],
+                              curses.color_pair(agent_pairs[agent]))
         except curses.error:
             pass
