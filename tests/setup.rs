@@ -65,6 +65,8 @@ cp "$TEST_EXECUTABLE" "$prefix/bin/agents-sessions"
             .arg(&self.bin)
             .current_dir(&self.cwd)
             .env("PATH", path)
+            // unsupported shell, so setup prints the PATH line instead of writing a profile
+            .env("SHELL", "/bin/sh")
             .env("TEST_EXECUTABLE", env!("CARGO_BIN_EXE_agents-sessions"))
             .env("HOME", self._temporary.path());
         command
