@@ -6,9 +6,36 @@ import json
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from src.data.models import Session
+
+
+class FakeWindow:
+    """Record what curses draws: one (char, attr) per screen cell.
+
+    Later calls overwrite earlier ones, like on a real screen.
+    """
+
+    def __init__(self) -> None:
+        self.cells: Dict[Tuple[int, int], Tuple[str, int]] = {}
+
+    def addstr(self, y: int, x: int, text: str, attr: int = 0) -> None:
+        for offset, char in enumerate(text):
+            self.cells[(y, x + offset)] = (char, attr)
+
+    def lines(self) -> List[str]:
+        """Return the drawn text of each row, in row order."""
+        result: List[str] = []
+        for y in sorted({row for row, _ in self.cells}):
+            last_x = max(column for row, column in self.cells if row == y)
+            text = "".join(self.cells.get((y, x), (" ", 0))[0] for x in range(last_x + 1))
+            result.append(text.rstrip())
+        return result
+
+    def attr_at(self, y: int, x: int) -> int:
+        """Return the attribute used to draw the cell at (y, x)."""
+        return self.cells[(y, x)][1]
 
 
 def write_jsonl(path: Path, entries: List[dict]) -> None:

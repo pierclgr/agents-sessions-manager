@@ -3,45 +3,34 @@
 from __future__ import annotations
 
 import unittest
-from typing import Dict, List, Tuple
 from unittest import mock
 
 from src.tui import left_pane, right_pane
-from tests.helpers import make_session
+from tests.helpers import FakeWindow, make_session
 
 SID_NAMED = "aaaaaaaa-0000-0000-0000-000000000001"
 SID_PLAIN = "bbbbbbbb-0000-0000-0000-000000000002"
 
-
-class _FakeWindow:
-    """Record addstr calls so tests can read the drawn lines."""
-
-    def __init__(self) -> None:
-        self.cells: Dict[Tuple[int, int], str] = {}
-
-    def addstr(self, y: int, x: int, text: str, attr: int = 0) -> None:
-        self.cells[(y, x)] = text
-
-    def lines(self) -> List[str]:
-        """Return the drawn text of each row, in row order."""
-        rows: Dict[int, List[Tuple[int, str]]] = {}
-        for (y, x), text in self.cells.items():
-            rows.setdefault(y, []).append((x, text))
-        return ["".join(text for _, text in sorted(rows[y])).rstrip() for y in sorted(rows)]
+ACCENT_PAIR = 1
+NORMAL_PAIR = 2
+MARKER_PAIR = 3
+AGENT_PAIRS = {"claude": 7, "codex": 8}
 
 
-@mock.patch("curses.color_pair", return_value=0)
+# color_pair(n) returns n, so tests can read which pair drew each cell
+@mock.patch("curses.color_pair", side_effect=lambda pair: pair)
 class PanesTest(unittest.TestCase):
-    """Check the columns and the name/ID rules."""
+    """Check the columns, the name/ID rules and the agent colors."""
 
     def test_left_pane_columns_and_session_label(self, _color_pair: mock.Mock) -> None:
         sessions = [
             make_session("claude", SID_NAMED, name="data-reader"),
             make_session("codex", SID_PLAIN),
         ]
-        window = _FakeWindow()
+        window = FakeWindow()
 
-        left_pane.draw(window, sessions, 0, 0, "SELECT", set(), 1, 2, 3, x=0, y=0, width=120, height=5)
+        left_pane.draw(window, sessions, 0, 0, "SELECT", set(), ACCENT_PAIR, NORMAL_PAIR, MARKER_PAIR, AGENT_PAIRS,
+                       x=0, y=0, width=120, height=5)
 
         header, named_row, plain_row = window.lines()[:3]
         self.assertEqual(header.split(), ["Agent", "Project", "Session", "Modified", "Last", "message"])
@@ -51,19 +40,35 @@ class PanesTest(unittest.TestCase):
         self.assertIn("codex", plain_row)
         self.assertIn(SID_PLAIN[:8], plain_row)
 
+    def test_left_pane_colors_agent_names(self, _color_pair: mock.Mock) -> None:
+        sessions = [make_session("claude", SID_NAMED), make_session("codex", SID_PLAIN)]
+        window = FakeWindow()
+
+        left_pane.draw(window, sessions, 0, 0, "SELECT", set(), ACCENT_PAIR, NORMAL_PAIR, MARKER_PAIR, AGENT_PAIRS,
+                       x=0, y=0, width=120, height=5)
+
+        # the highlighted row keeps the accent color, also on the agent name
+        self.assertEqual(window.attr_at(1, 0), ACCENT_PAIR)
+        # other rows: agent name in its color, the rest in the normal color
+        for column in range(len("codex")):
+            self.assertEqual(window.attr_at(2, column), AGENT_PAIRS["codex"])
+        self.assertEqual(window.attr_at(2, len("Agent") + 2), NORMAL_PAIR)
+
     def test_left_pane_marks_selected_sessions(self, _color_pair: mock.Mock) -> None:
         sessions = [make_session("claude", SID_NAMED), make_session("codex", SID_NAMED)]
-        window = _FakeWindow()
+        window = FakeWindow()
 
-        left_pane.draw(window, sessions, 0, 0, "DELETE", {("codex", SID_NAMED)}, 1, 2, 3,
-                       x=0, y=0, width=120, height=5)
+        left_pane.draw(window, sessions, 0, 0, "DELETE", {("codex", SID_NAMED)}, ACCENT_PAIR, NORMAL_PAIR,
+                       MARKER_PAIR, AGENT_PAIRS, x=0, y=0, width=120, height=5)
 
         _, claude_row, codex_row = window.lines()[:3]
         self.assertTrue(claude_row.startswith("[ ]"))
         self.assertTrue(codex_row.startswith("[x]"))
+        # the agent name starts after the 4-char marker
+        self.assertEqual(window.attr_at(2, 4), AGENT_PAIRS["codex"])
 
     def test_right_pane_shows_name_and_id(self, _color_pair: mock.Mock) -> None:
-        window = _FakeWindow()
+        window = FakeWindow()
 
         right_pane.draw(window, make_session("pi", SID_NAMED, name="data-reader"), 1, x=0, y=0, width=60, height=30)
 
@@ -73,7 +78,7 @@ class PanesTest(unittest.TestCase):
         self.assertEqual(lines[lines.index("Session ID:") + 1], SID_NAMED)
 
     def test_right_pane_without_name_shows_only_id(self, _color_pair: mock.Mock) -> None:
-        window = _FakeWindow()
+        window = FakeWindow()
 
         right_pane.draw(window, make_session("pi", SID_PLAIN), 1, x=0, y=0, width=60, height=30)
 
