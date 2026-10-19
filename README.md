@@ -24,7 +24,7 @@ Works on **macOS** and **Linux**. SQLite is bundled into the executable.
 - **Multi-agent** -- Shows the sessions of Claude Code, Codex, OpenCode and Pi in one list, and resumes each one with its own agent
 - **SELECT mode** -- Browse all sessions and resume any of them with a single keystroke
 - **DELETE mode** -- Batch-select sessions (or select all of them) and delete them with all their data
-- **Agent filter** -- Show or hide the sessions of each agent with keys `1`-`4`, in both modes
+- **Agent filter** -- Press `1`-`4` to show only the sessions of one agent; press the same key again to show all agents, in both modes
 - **Agent colors** -- Each agent name has its own color in the list and in the filter bar: Claude orange, Codex light blue, OpenCode light green, Pi light magenta (red, cyan, green and magenta when the terminal cannot define custom colors)
 - **Session names** -- Shows the name of a session, either the one you set (e.g. `/rename`) or the one the agent generated; sessions without a name show their ID
 - **CLI subcommands** -- Non-interactive `ls`, `launch`, and `delete` commands for scripting and quick access

@@ -7,6 +7,7 @@ use agents_sessions::{
 use common::session;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{Terminal, backend::TestBackend, style::Color};
+use std::collections::HashSet;
 
 fn state() -> State {
     State::new(vec![
@@ -22,12 +23,16 @@ fn key(state: &mut State, code: KeyCode) -> Action {
 }
 
 #[test]
-fn all_agents_start_visible_and_filters_restore_the_list() {
+fn all_agents_start_visible_and_number_keys_toggle_a_single_agent() {
     let mut state = state();
     assert_eq!(state.filters.len(), 4);
     key(&mut state, KeyCode::Char('1'));
+    assert_eq!(state.filters, HashSet::from([Agent::ALL[0]]));
     assert_eq!(state.visible.len(), 2);
-    key(&mut state, KeyCode::Char('1'));
+    key(&mut state, KeyCode::Char('2'));
+    assert_eq!(state.filters, HashSet::from([Agent::ALL[1]]));
+    key(&mut state, KeyCode::Char('2'));
+    assert_eq!(state.filters.len(), 4);
     assert_eq!(state.visible.len(), 4);
 }
 
@@ -37,23 +42,20 @@ fn filtering_clamps_cursor_and_drops_hidden_selections() {
     key(&mut state, KeyCode::Char('d'));
     key(&mut state, KeyCode::Char('a'));
     state.cursor = 3;
-    key(&mut state, KeyCode::Char('4'));
-    assert_eq!(state.cursor, 2);
-    assert_eq!(state.selected.len(), 3);
     key(&mut state, KeyCode::Char('1'));
+    assert_eq!(state.cursor, 1);
+    assert_eq!(state.selected.len(), 2);
     key(&mut state, KeyCode::Char('2'));
-    assert!(state.visible.is_empty());
     assert!(state.selected.is_empty());
-    assert_eq!(state.cursor, 0);
 }
 
 #[test]
 fn select_all_toggles_only_visible_sessions() {
     let mut state = state();
     key(&mut state, KeyCode::Char('d'));
-    key(&mut state, KeyCode::Char('4'));
+    key(&mut state, KeyCode::Char('1'));
     key(&mut state, KeyCode::Char('A'));
-    assert_eq!(state.selected.len(), 3);
+    assert_eq!(state.selected.len(), 2);
     key(&mut state, KeyCode::Char('a'));
     assert!(state.selected.is_empty());
 }
@@ -350,18 +352,18 @@ fn deletion_reloads_sessions_keeps_filters_and_counts_failed_deletes() {
     db.execute_batch("CREATE TABLE threads (id TEXT,cwd TEXT,name TEXT,first_user_message TEXT,created_at_ms INTEGER,updated_at_ms INTEGER,archived INTEGER,thread_source TEXT);
         INSERT INTO threads VALUES ('x','/p',NULL,'hi',1000,2000,0,'user');").unwrap();
     let mut state = State::new(load_all_sessions(&paths).unwrap());
-    key(&mut state, KeyCode::Char('4'));
+    key(&mut state, KeyCode::Char('2'));
     key(&mut state, KeyCode::Char('d'));
     key(&mut state, KeyCode::Char('a'));
     state.delete_selected(&paths, &FailingRunner).unwrap();
-    assert_eq!(state.all_sessions.len(), 1);
-    assert_eq!(state.all_sessions[0].agent, Agent::Codex);
+    assert_eq!(state.all_sessions.len(), 2);
+    assert_eq!(state.visible.len(), 1);
     assert_eq!(state.mode, Mode::Select);
     assert!(state.selected.is_empty());
     assert!(state.range_anchor.is_none());
-    assert!(!state.filters.contains(&Agent::Pi));
+    assert_eq!(state.filters, HashSet::from([Agent::Codex]));
     assert_eq!(
         state.message.as_deref(),
-        Some("Deleted 1 session(s). 1 error(s): cannot delete")
+        Some("Deleted 0 session(s). 1 error(s): cannot delete")
     );
 }

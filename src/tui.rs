@@ -141,8 +141,11 @@ impl State {
         }
         if let KeyCode::Char(number @ '1'..='4') = key.code {
             let agent = Agent::ALL[(number as u8 - b'1') as usize];
-            if !self.filters.remove(&agent) {
-                self.filters.insert(agent);
+            // pressing the key of the only shown agent shows all agents again
+            if self.filters.len() == 1 && self.filters.contains(&agent) {
+                self.filters = Agent::ALL.into_iter().collect();
+            } else {
+                self.filters = HashSet::from([agent]);
             }
             self.apply_filter();
             return Action::None;
