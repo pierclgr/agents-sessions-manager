@@ -1,6 +1,19 @@
-# Agents Sessions Manager
+<h2 align="center">Agents Sessions Manager</h2>
 
-A terminal tool for browsing, resuming, and deleting coding agent sessions across all your projects. Supported agents: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), [OpenCode](https://opencode.ai) and [Pi](https://github.com/earendil-works/pi-mono). Provides both an interactive full-screen TUI and non-interactive CLI subcommands.
+<p align="center"><em>Browse, resume, and delete coding agent sessions</em></p>
+
+<p align="center">
+  <a href="https://www.repostatus.org/#active"><img
+    src="https://flat.badgen.net/badge/repo%20status/Active/green"
+    alt="Project Status: Active – The project has reached a stable, usable
+    state and is being actively developed."></a>
+</p>
+
+A terminal tool for browsing, resuming, and deleting coding agent sessions
+across all your projects. Supported agents: [Claude Code](https://docs.anthropic.com/en/docs/claude-code),
+[Codex](https://github.com/openai/codex), [OpenCode](https://opencode.ai),
+and [Pi](https://github.com/earendil-works/pi-mono). Provides both an
+interactive full-screen TUI and non-interactive CLI subcommands.
 
 Built with **Rust**, using Ratatui and Crossterm for the terminal interface.
 Works on **macOS** and **Linux**. SQLite is bundled into the executable.
