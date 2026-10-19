@@ -4,10 +4,47 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import List
+from pathlib import Path
+from typing import List, Optional
 
 from src.data.models import Session
 from src.utils.paths import find_session_jsonl
+
+
+def load_session_name(session_id: str, claude_dir: Optional[Path] = None) -> Optional[str]:
+    """Read the user-set session name (set with /rename) from the per-session .jsonl file.
+
+    Only lines containing "custom-title" are parsed, so large transcripts
+    are scanned quickly. The last title wins. Auto-generated "ai-title"
+    entries are ignored.
+
+    Args:
+        session_id: The session UUID.
+        claude_dir: Optional override for the Claude data directory.
+
+    Returns:
+        The session name, or None if the session has none.
+    """
+    path = find_session_jsonl(session_id, claude_dir=claude_dir)
+    if path is None:
+        return None
+
+    name: Optional[str] = None
+    try:
+        with open(path, encoding="utf-8", errors="replace") as file:
+            for line in file:
+                if '"custom-title"' not in line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("type") == "custom-title":
+                    name = entry.get("customTitle") or None
+    except OSError:
+        return None
+
+    return name
 
 
 def load_session_detail(session: Session) -> Session:

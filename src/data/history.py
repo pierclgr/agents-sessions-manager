@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from src.data.models import Session
+from src.data.session import load_session_name
 from src.utils.formatting import ms_to_datetime
 from src.utils.paths import get_history_path
 
@@ -15,7 +16,8 @@ from src.utils.paths import get_history_path
 def load_sessions(claude_dir: Optional[Path] = None) -> List[Session]:
     """Read history.jsonl, aggregate by sessionId, return flat list sorted by last_active_at descending.
 
-    Raises SystemExit with message if file not found or permission denied.
+    Returns an empty list if the file is not found (Claude Code not used).
+    Raises SystemExit with message if permission denied.
     Skips malformed lines with a warning to stderr.
     """
     history_path = get_history_path() if claude_dir is None else claude_dir / "history.jsonl"
@@ -23,8 +25,7 @@ def load_sessions(claude_dir: Optional[Path] = None) -> List[Session]:
     try:
         file = open(history_path, encoding="utf-8")
     except FileNotFoundError:
-        print(f"Error: {history_path} not found. Is Claude Code installed?", file=sys.stderr)
-        sys.exit(1)
+        return []
     except PermissionError:
         print(f"Error: Cannot read {history_path}. Check permissions.", file=sys.stderr)
         sys.exit(1)
@@ -58,12 +59,14 @@ def load_sessions(claude_dir: Optional[Path] = None) -> List[Session]:
         timestamps = [e["timestamp"] for e in group]
         sessions.append(
             Session(
+                agent="claude",
                 session_id=session_id,
                 project_path=group[0]["project"],
                 created_at=ms_to_datetime(min(timestamps)),
                 last_active_at=ms_to_datetime(max(timestamps)),
                 latest_command=group[-1]["display"],
                 commands=[e["display"] for e in group],
+                name=load_session_name(session_id, claude_dir=claude_dir),
                 todos=[],
             )
         )
