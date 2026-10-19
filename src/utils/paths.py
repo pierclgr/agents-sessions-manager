@@ -40,3 +40,11 @@ def find_session_jsonl(session_id: str, claude_dir: Optional[Path] = None) -> Op
     root = claude_dir if claude_dir is not None else get_claude_dir()
     matches = sorted((root / "projects").glob(f"*/{session_id}.jsonl"))
     return matches[0] if matches else None
+
+
+def get_codex_dir() -> Path:
+    """Return Codex data dir. Honors CODEX_HOME env var, defaults to ~/.codex/."""
+    env = os.environ.get("CODEX_HOME")
+    if env:
+        return Path(env)
+    return Path.home() / ".codex"

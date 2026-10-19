@@ -6,12 +6,13 @@ from typing import Dict, List
 
 from src.data.agents.base import AgentProvider
 from src.data.agents.claude import ClaudeProvider
+from src.data.agents.codex import CodexProvider
 from src.data.models import Session
 
 # Order matters: it sets the filter keys 1-4 in the TUI
 PROVIDERS: Dict[str, AgentProvider] = {
     provider.key: provider
-    for provider in (ClaudeProvider(),)
+    for provider in (ClaudeProvider(), CodexProvider())
 }
 
 
