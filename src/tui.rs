@@ -46,8 +46,8 @@ const SELECT_ACCENT: Color = Color::Rgb(202, 124, 94);
 const DELETE_ACCENT: Color = Color::Rgb(55, 6, 3);
 const COLUMN_GAP: usize = 2;
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
-const SELECT_HINTS: &str = " MODE: SELECT  |  ↑/↓ Navigate  |  D: CWD/All  |  1-4: Filter  |  Enter: Resume session  |  S: Delete mode  |  ESC/Q: Quit";
-const DELETE_HINTS: &str = " MODE: DELETE  |  ↑/↓ Navigate  |  D: CWD/All  |  1-4: Filter  |  Tab/Space: Toggle select  |  Shift+Tab: Select range  |  A: Select all  |  Enter: Delete selected  |  S: Select mode  |  ESC/Q: Quit";
+const SELECT_HINTS: &str = " MODE: SELECT  |  ↑/↓ Navigate  |  F: CWD/All  |  1-4: Filter  |  Enter: Resume session  |  D: Delete mode  |  ESC/Q: Quit";
+const DELETE_HINTS: &str = " MODE: DELETE  |  ↑/↓ Navigate  |  F: CWD/All  |  1-4: Filter  |  Tab/Space: Toggle select  |  Shift+Tab: Select range  |  A: Select all  |  Enter: Delete selected  |  D: Select mode  |  ESC/Q: Quit";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DirectoryScope {
@@ -177,7 +177,7 @@ impl State {
         if matches!(key.code, KeyCode::Esc | KeyCode::Char('q' | 'Q')) {
             return Action::Quit;
         }
-        if matches!(key.code, KeyCode::Char('d' | 'D')) {
+        if matches!(key.code, KeyCode::Char('f' | 'F')) {
             self.directory_scope = if self.directory_scope == DirectoryScope::Cwd {
                 DirectoryScope::All
             } else {
@@ -186,7 +186,7 @@ impl State {
             self.apply_filter();
             return Action::None;
         }
-        if matches!(key.code, KeyCode::Char('s' | 'S')) {
+        if matches!(key.code, KeyCode::Char('d' | 'D')) {
             self.mode = if self.mode == Mode::Select {
                 Mode::Delete
             } else {
@@ -383,7 +383,7 @@ pub fn render(frame: &mut Frame, state: &mut State, palette: &Palette) {
         "All"
     };
     let mut spans = vec![Span::styled(
-        format!(" D: {scope}  |  Agents: "),
+        format!(" F: {scope}  |  Agents: "),
         Style::default().add_modifier(Modifier::BOLD),
     )];
     for (index, agent) in Agent::ALL.into_iter().enumerate() {
@@ -425,13 +425,13 @@ pub fn render(frame: &mut Frame, state: &mut State, palette: &Palette) {
             ),
         );
         let mode_hint = if state.mode == Mode::Select {
-            "S: Delete mode"
+            "D: Delete mode"
         } else {
-            "S: Select mode"
+            "D: Select mode"
         };
         frame.render_widget(
             Paragraph::new(format!(
-                "  D: CWD/All  |  1-4: Filter  |  {mode_hint}  |  ESC/Q: Quit"
+                "  F: CWD/All  |  1-4: Filter  |  {mode_hint}  |  ESC/Q: Quit"
             ))
             .style(palette.accent(state.mode)),
             status,

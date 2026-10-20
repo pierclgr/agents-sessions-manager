@@ -54,11 +54,11 @@ fn startup_scope_matches_only_the_exact_launch_directory() {
     assert_eq!(state.directory_scope, DirectoryScope::Cwd);
     assert_eq!(state.visible, vec![0]);
     assert_eq!(state.all_sessions.len(), 4);
-    key(&mut state, KeyCode::Char('d'));
+    key(&mut state, KeyCode::Char('f'));
     assert_eq!(state.directory_scope, DirectoryScope::All);
     assert_eq!(state.visible, vec![0, 1, 2, 3]);
     assert_eq!(state.mode, Mode::Select);
-    key(&mut state, KeyCode::Char('D'));
+    key(&mut state, KeyCode::Char('F'));
     assert_eq!(state.directory_scope, DirectoryScope::Cwd);
     assert_eq!(state.visible, vec![0]);
 }
@@ -76,8 +76,8 @@ fn cwd_scope_matches_symlink_aliases_in_either_path() {
         let mut state = State::new(vec![session], cwd);
         assert_eq!(state.visible, vec![0]);
         assert_eq!(state.current().unwrap().project_path, path);
-        key(&mut state, KeyCode::Char('d'));
-        key(&mut state, KeyCode::Char('d'));
+        key(&mut state, KeyCode::Char('f'));
+        key(&mut state, KeyCode::Char('f'));
         assert_eq!(state.visible, vec![0]);
     }
 }
@@ -98,10 +98,10 @@ fn directory_and_agent_filters_combine_in_both_modes() {
         state.mode = mode;
         key(&mut state, KeyCode::Char('2'));
         assert_eq!(state.visible, vec![1]);
-        key(&mut state, KeyCode::Char('d'));
+        key(&mut state, KeyCode::Char('f'));
         assert_eq!(state.visible, vec![1, 2]);
         assert_eq!(state.filters, HashSet::from([Agent::Codex]));
-        key(&mut state, KeyCode::Char('D'));
+        key(&mut state, KeyCode::Char('F'));
         assert_eq!(state.visible, vec![1]);
         key(&mut state, KeyCode::Char('2'));
         assert_eq!(state.visible, vec![0, 1]);
@@ -114,14 +114,14 @@ fn both_toggles_work_with_empty_results_and_empty_data() {
     for sessions in [vec![], vec![session(Agent::Claude, "c1")]] {
         let mut state = State::new(sessions, "/elsewhere".into());
         assert!(state.visible.is_empty());
-        key(&mut state, KeyCode::Char('s'));
-        assert_eq!(state.mode, Mode::Delete);
         key(&mut state, KeyCode::Char('d'));
+        assert_eq!(state.mode, Mode::Delete);
+        key(&mut state, KeyCode::Char('f'));
         assert_eq!(state.directory_scope, DirectoryScope::All);
         assert_eq!(state.visible.len(), state.all_sessions.len());
-        key(&mut state, KeyCode::Char('S'));
-        assert_eq!(state.mode, Mode::Select);
         key(&mut state, KeyCode::Char('D'));
+        assert_eq!(state.mode, Mode::Select);
+        key(&mut state, KeyCode::Char('F'));
         assert_eq!(state.directory_scope, DirectoryScope::Cwd);
         assert!(state.visible.is_empty());
     }
@@ -131,17 +131,17 @@ fn both_toggles_work_with_empty_results_and_empty_data() {
 fn directory_filter_clamps_cursor_resets_scroll_and_drops_hidden_selections() {
     let mut state = state();
     state.all_sessions[3].project_path = "/elsewhere".into();
+    key(&mut state, KeyCode::Char('f'));
     key(&mut state, KeyCode::Char('d'));
-    key(&mut state, KeyCode::Char('s'));
     key(&mut state, KeyCode::Char('a'));
     state.cursor = 3;
     state.scroll_offset = 2;
-    key(&mut state, KeyCode::Char('D'));
+    key(&mut state, KeyCode::Char('F'));
     assert_eq!(state.cursor, 2);
     assert_eq!(state.scroll_offset, 0);
     assert_eq!(state.selected.len(), 3);
     assert!(!state.selected.contains(&(Agent::Pi, "p1".into())));
-    key(&mut state, KeyCode::Char('d'));
+    key(&mut state, KeyCode::Char('f'));
     assert_eq!(state.visible.len(), 4);
     assert_eq!(state.selected.len(), 3);
 }
@@ -149,7 +149,7 @@ fn directory_filter_clamps_cursor_resets_scroll_and_drops_hidden_selections() {
 #[test]
 fn filtering_clamps_cursor_and_drops_hidden_selections() {
     let mut state = state();
-    key(&mut state, KeyCode::Char('s'));
+    key(&mut state, KeyCode::Char('d'));
     key(&mut state, KeyCode::Char('a'));
     state.cursor = 3;
     key(&mut state, KeyCode::Char('1'));
@@ -162,7 +162,7 @@ fn filtering_clamps_cursor_and_drops_hidden_selections() {
 #[test]
 fn select_all_toggles_only_visible_sessions() {
     let mut state = state();
-    key(&mut state, KeyCode::Char('s'));
+    key(&mut state, KeyCode::Char('d'));
     key(&mut state, KeyCode::Char('1'));
     key(&mut state, KeyCode::Char('A'));
     assert_eq!(state.selected.len(), 2);
@@ -173,7 +173,7 @@ fn select_all_toggles_only_visible_sessions() {
 #[test]
 fn deselected_anchor_is_ignored_by_range_select() {
     let mut state = state();
-    key(&mut state, KeyCode::Char('s'));
+    key(&mut state, KeyCode::Char('d'));
     key(&mut state, KeyCode::Tab);
     key(&mut state, KeyCode::Tab);
     key(&mut state, KeyCode::Down);
@@ -185,7 +185,7 @@ fn deselected_anchor_is_ignored_by_range_select() {
 #[test]
 fn tab_and_space_toggle_and_set_range_anchor() {
     let mut state = state();
-    key(&mut state, KeyCode::Char('s'));
+    key(&mut state, KeyCode::Char('d'));
     key(&mut state, KeyCode::Tab);
     assert_eq!(state.selected.len(), 1);
     key(&mut state, KeyCode::Char(' '));
@@ -197,7 +197,7 @@ fn tab_and_space_toggle_and_set_range_anchor() {
 fn shift_tab_selects_ranges_in_both_directions() {
     for (start, end) in [(0, 2), (3, 1)] {
         let mut state = state();
-        key(&mut state, KeyCode::Char('s'));
+        key(&mut state, KeyCode::Char('d'));
         state.cursor = start;
         key(&mut state, KeyCode::Tab);
         state.cursor = end;
@@ -209,7 +209,7 @@ fn shift_tab_selects_ranges_in_both_directions() {
 #[test]
 fn missing_or_hidden_range_anchor_selects_only_current() {
     let mut state = state();
-    key(&mut state, KeyCode::Char('s'));
+    key(&mut state, KeyCode::Char('d'));
     state.cursor = 1;
     key(&mut state, KeyCode::BackTab);
     assert_eq!(state.selected.len(), 1);
@@ -222,13 +222,13 @@ fn missing_or_hidden_range_anchor_selects_only_current() {
 #[test]
 fn leaving_delete_mode_clears_selection_and_anchor() {
     let mut state = state();
-    key(&mut state, KeyCode::Char('s'));
+    key(&mut state, KeyCode::Char('d'));
     key(&mut state, KeyCode::Tab);
-    key(&mut state, KeyCode::Char('S'));
+    key(&mut state, KeyCode::Char('D'));
     assert_eq!(state.mode, Mode::Select);
     assert!(state.selected.is_empty());
     assert!(state.range_anchor.is_none());
-    key(&mut state, KeyCode::Char('s'));
+    key(&mut state, KeyCode::Char('d'));
     state.cursor = 2;
     key(&mut state, KeyCode::BackTab);
     assert_eq!(state.selected.len(), 1);
@@ -273,13 +273,13 @@ fn confirmation_quit_keys_only_cancel_and_yes_requests_deletion() {
         KeyCode::Char('q'),
         KeyCode::Char('Q'),
         KeyCode::Char('n'),
+        KeyCode::Char('f'),
+        KeyCode::Char('F'),
         KeyCode::Char('d'),
         KeyCode::Char('D'),
-        KeyCode::Char('s'),
-        KeyCode::Char('S'),
     ] {
         let mut state = state();
-        key(&mut state, KeyCode::Char('s'));
+        key(&mut state, KeyCode::Char('d'));
         key(&mut state, KeyCode::Tab);
         key(&mut state, KeyCode::Enter);
         assert!(state.confirming);
@@ -297,7 +297,7 @@ fn confirmation_quit_keys_only_cancel_and_yes_requests_deletion() {
 fn select_enter_launches_and_delete_enter_requires_a_selection() {
     let mut state = state();
     assert_eq!(key(&mut state, KeyCode::Enter), Action::Launch);
-    key(&mut state, KeyCode::Char('s'));
+    key(&mut state, KeyCode::Char('d'));
     assert_eq!(key(&mut state, KeyCode::Enter), Action::None);
     assert_eq!(state.message.as_deref(), Some("No sessions selected."));
 }
@@ -421,7 +421,7 @@ fn scroll_offset_keeps_cursor_visible() {
 fn modified_confirmation_keys_do_not_delete_sessions() {
     for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
         let mut state = state();
-        key(&mut state, KeyCode::Char('s'));
+        key(&mut state, KeyCode::Char('d'));
         key(&mut state, KeyCode::Tab);
         key(&mut state, KeyCode::Enter);
         let action = state.handle_key(KeyEvent::new(KeyCode::Char('y'), modifiers));
@@ -449,25 +449,25 @@ fn filter_labels_have_their_agent_colors() {
 fn filter_bar_and_hints_show_directory_scope_and_new_mode_key() {
     let mut state = state();
     let select = text(&screen(&mut state, 180, 30));
-    assert!(select.contains("D: CWD"));
-    assert!(select.find("D: CWD").unwrap() < select.find("Agents:").unwrap());
-    assert!(select.contains("S: Delete mode"));
-    assert!(select.contains("D: CWD/All"));
+    assert!(select.contains("F: CWD"));
+    assert!(select.find("F: CWD").unwrap() < select.find("Agents:").unwrap());
+    assert!(select.contains("D: Delete mode"));
+    assert!(select.contains("F: CWD/All"));
+    key(&mut state, KeyCode::Char('f'));
     key(&mut state, KeyCode::Char('d'));
-    key(&mut state, KeyCode::Char('s'));
     let delete = text(&screen(&mut state, 240, 30));
-    assert!(delete.contains("D: All"));
-    assert!(delete.contains("S: Select mode"));
+    assert!(delete.contains("F: All"));
+    assert!(delete.contains("D: Select mode"));
     let narrow = text(&screen(&mut state, 20, 4));
-    assert!(narrow.contains("D: All"));
+    assert!(narrow.contains("F: All"));
 
     let mut empty = State::new(vec![], "/p/proj".into());
     let rendered = text(&screen(&mut empty, 100, 8));
-    assert!(rendered.contains("D: CWD/All"));
-    assert!(rendered.contains("S: Delete mode"));
-    key(&mut empty, KeyCode::Char('s'));
+    assert!(rendered.contains("F: CWD/All"));
+    assert!(rendered.contains("D: Delete mode"));
+    key(&mut empty, KeyCode::Char('d'));
     let rendered = text(&screen(&mut empty, 100, 8));
-    assert!(rendered.contains("S: Select mode"));
+    assert!(rendered.contains("D: Select mode"));
 }
 
 #[test]
@@ -518,10 +518,10 @@ fn deletion_reloads_sessions_keeps_filters_and_counts_failed_deletes() {
     for (scope, count) in [(DirectoryScope::Cwd, 1), (DirectoryScope::All, 2)] {
         let mut state = State::new(load_all_sessions(&paths).unwrap(), "/p".into());
         if scope == DirectoryScope::All {
-            key(&mut state, KeyCode::Char('d'));
+            key(&mut state, KeyCode::Char('f'));
         }
         key(&mut state, KeyCode::Char('2'));
-        key(&mut state, KeyCode::Char('s'));
+        key(&mut state, KeyCode::Char('d'));
         key(&mut state, KeyCode::Tab);
         state.delete_selected(&paths, &FailingRunner).unwrap();
         assert_eq!(state.all_sessions.len(), 3);

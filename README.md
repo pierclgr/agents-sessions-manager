@@ -26,7 +26,7 @@ Works on **macOS** and **Linux**. SQLite is bundled into the executable.
 - **DELETE mode** -- Batch-select sessions (or select all of them) and delete them with all their data
 - **Agent filter** -- Press `1`-`4` to show only the sessions of one agent; press the same key again to show all agents, in both modes
 - **Directory filter** -- Starts with sessions from the launch directory.
-  Press `D` to toggle between CWD and all directories, in both modes
+  Press `F` to toggle between CWD and all directories, in both modes
 - **Agent colors** -- Each agent name has its own color in the list and in the filter bar: Claude orange, Codex light blue, OpenCode light green, Pi light magenta (red, cyan, green and magenta when the terminal cannot define custom colors)
 - **Session names** -- Shows the name of a session, either the one you set (e.g. `/rename`) or the one the agent generated; sessions without a name show their ID
 - **CLI subcommands** -- Non-interactive `ls`, `launch`, and `delete` commands for scripting and quick access
@@ -93,7 +93,7 @@ agents-sessions
 
 Launches the full-screen session browser in SELECT mode, showing sessions
 from the exact launch directory (CWD). Subdirectories are excluded. Paths
-through symlinks to the same directory also match. Press `D` to show sessions
+through symlinks to the same directory also match. Press `F` to show sessions
 from all directories, then press it again to return to CWD. Each launch
 starts in CWD view with all agents enabled; directory and agent filters work
 together.
@@ -106,7 +106,7 @@ SELECT mode uses a muted orange (`#A36847`) accent with white text (gray when cu
 ┌──────────────────────────────────┬──────────────────────┐
 │  ASCII Banner                    │                      │
 ├──────────────────────────────────┤                      │
-│  D: CWD | Agents: [x] 1 Claude    │                      │
+│  F: CWD | Agents: [x] 1 Claude    │                      │
 ├──────────────────────────────────┤  Session details     │
 │  Session list (60%)              │  (40%)               │
 │                                  │                      │
@@ -128,9 +128,9 @@ SELECT mode uses a muted orange (`#A36847`) accent with white text (gray when cu
 | `Up` / `k`       | Move cursor up                |
 | `Down` / `j`     | Move cursor down              |
 | `1` - `4`        | Show/hide Claude, Codex, OpenCode, Pi sessions |
-| `D`              | Toggle CWD / all directories   |
+| `F`              | Toggle CWD / all directories   |
 | `Enter`          | Resume the highlighted session |
-| `S`              | Switch to DELETE mode          |
+| `D`              | Switch to DELETE mode          |
 | `Esc` / `Q`      | Quit                          |
 
 #### DELETE mode
@@ -140,15 +140,15 @@ SELECT mode uses a muted orange (`#A36847`) accent with white text (gray when cu
 | `Up` / `k`       | Move cursor up                       |
 | `Down` / `j`     | Move cursor down                     |
 | `1` - `4`        | Show/hide Claude, Codex, OpenCode, Pi sessions (hidden sessions are unselected) |
-| `D`              | Toggle CWD / all; unselect hidden sessions |
+| `F`              | Toggle CWD / all; unselect hidden sessions |
 | `Tab` / `Space`  | Toggle selection on current session  |
 | `Shift+Tab`      | Select all sessions from the last one toggled with `Tab`/`Space` to the cursor |
 | `A`              | Select all shown sessions (press again to clear the selection) |
 | `Enter`          | Delete selected sessions (with confirmation; `Esc` cancels) |
-| `S`              | Switch back to SELECT mode           |
+| `D`              | Switch back to SELECT mode           |
 | `Esc` / `Q`      | Quit                                 |
 
-`D`, `S`, and `Q` also work in lowercase. The directory and mode toggles
+`F`, `D`, and `Q` also work in lowercase. The directory and mode toggles
 work when no sessions are shown. During delete confirmation, `Esc`, `Q`,
 and the toggle keys cancel the prompt without changing the filters or mode.
 
