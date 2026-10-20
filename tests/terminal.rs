@@ -143,7 +143,7 @@ fn browser_navigation_resize_and_delete_cancellation_restore_the_terminal() {
     history(root.path(), root.path());
     let mut browser = Browser::start(root.path(), &[], None);
     browser.wait_for("MODE: SELECT");
-    browser.input("d \r");
+    browser.input("s \r");
     browser.wait_for("Delete 1 session(s)?");
     browser.input("\x1b");
     browser
@@ -155,7 +155,7 @@ fn browser_navigation_resize_and_delete_cancellation_restore_the_terminal() {
             pixel_height: 0,
         })
         .unwrap();
-    browser.input("jkdq");
+    browser.input("jksq");
     browser.finish(0, true);
     assert!(
         fs::read_to_string(paths(root.path()).claude.join("history.jsonl"))
@@ -171,6 +171,32 @@ fn empty_browser_quits_cleanly() {
     browser.wait_for("found.");
     browser.input("q");
     browser.finish(0, true);
+}
+
+#[test]
+fn directory_toggle_reveals_other_projects_without_switching_mode() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    fs::create_dir(&project).unwrap();
+    history(root.path(), &project);
+    let mut browser = Browser::start(root.path(), &[], None);
+    browser.wait_for("found.");
+    assert!(!browser.text.contains("terminal-session"));
+    browser.input("s");
+    browser.wait_for("S: Select mode");
+    browser.input("d");
+    browser.wait_for("MODE: DELETE");
+    browser.wait_for("terminal-session");
+    browser.text.clear();
+    browser.input("D");
+    browser.wait_for("found.");
+    browser.input("Sq");
+    browser.finish(0, true);
+    assert!(
+        fs::read_to_string(paths(root.path()).claude.join("history.jsonl"))
+            .unwrap()
+            .contains("terminal-session")
+    );
 }
 
 #[test]

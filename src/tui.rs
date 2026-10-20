@@ -18,6 +18,7 @@ use ratatui::{
 use std::{
     collections::HashSet,
     io,
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -45,8 +46,14 @@ const SELECT_ACCENT: Color = Color::Rgb(202, 124, 94);
 const DELETE_ACCENT: Color = Color::Rgb(55, 6, 3);
 const COLUMN_GAP: usize = 2;
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
-const SELECT_HINTS: &str = " MODE: SELECT  |  ↑/↓ Navigate  |  1-4: Filter  |  Enter: Resume session  |  D: Delete mode  |  ESC/Q: Quit";
-const DELETE_HINTS: &str = " MODE: DELETE  |  ↑/↓ Navigate  |  1-4: Filter  |  Tab/Space: Toggle select  |  Shift+Tab: Select range  |  A: Select all  |  Enter: Delete selected  |  D: Select mode  |  ESC/Q: Quit";
+const SELECT_HINTS: &str = " MODE: SELECT  |  ↑/↓ Navigate  |  D: CWD/All  |  1-4: Filter  |  Enter: Resume session  |  S: Delete mode  |  ESC/Q: Quit";
+const DELETE_HINTS: &str = " MODE: DELETE  |  ↑/↓ Navigate  |  D: CWD/All  |  1-4: Filter  |  Tab/Space: Toggle select  |  Shift+Tab: Select range  |  A: Select all  |  Enter: Delete selected  |  S: Select mode  |  ESC/Q: Quit";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectoryScope {
+    Cwd,
+    All,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Mode {
@@ -66,6 +73,7 @@ pub struct State {
     pub all_sessions: Vec<Session>,
     pub visible: Vec<usize>,
     pub filters: HashSet<Agent>,
+    pub directory_scope: DirectoryScope,
     pub mode: Mode,
     pub cursor: usize,
     pub scroll_offset: usize,
@@ -73,15 +81,18 @@ pub struct State {
     pub range_anchor: Option<SessionKey>,
     pub message: Option<String>,
     pub confirming: bool,
+    cwd: PathBuf,
     enriched_key: Option<SessionKey>,
 }
 
 impl State {
-    pub fn new(sessions: Vec<Session>) -> Self {
-        Self {
-            visible: (0..sessions.len()).collect(),
+    /// start with sessions from the exact launch directory
+    pub fn new(sessions: Vec<Session>, cwd: PathBuf) -> Self {
+        let mut state = Self {
+            visible: Vec::new(),
             all_sessions: sessions,
             filters: Agent::ALL.into_iter().collect(),
+            directory_scope: DirectoryScope::Cwd,
             mode: Mode::Select,
             cursor: 0,
             scroll_offset: 0,
@@ -89,8 +100,11 @@ impl State {
             range_anchor: None,
             message: None,
             confirming: false,
+            cwd,
             enriched_key: None,
-        }
+        };
+        state.apply_filter();
+        state
     }
 
     pub fn current(&self) -> Option<&Session> {
@@ -100,11 +114,21 @@ impl State {
     }
 
     fn apply_filter(&mut self) {
+        // match symlink aliases without changing paths used for display and launch
+        let cwd = self.cwd.canonicalize().unwrap_or_else(|_| self.cwd.clone());
         self.visible = self
             .all_sessions
             .iter()
             .enumerate()
             .filter(|(_, session)| self.filters.contains(&session.agent))
+            .filter(|(_, session)| {
+                self.directory_scope == DirectoryScope::All
+                    || session.project_path == self.cwd
+                    || session
+                        .project_path
+                        .canonicalize()
+                        .is_ok_and(|path| path == cwd)
+            })
             .map(|(index, _)| index)
             .collect();
         let visible_keys: HashSet<_> = self
@@ -153,6 +177,27 @@ impl State {
         if matches!(key.code, KeyCode::Esc | KeyCode::Char('q' | 'Q')) {
             return Action::Quit;
         }
+        if matches!(key.code, KeyCode::Char('d' | 'D')) {
+            self.directory_scope = if self.directory_scope == DirectoryScope::Cwd {
+                DirectoryScope::All
+            } else {
+                DirectoryScope::Cwd
+            };
+            self.apply_filter();
+            return Action::None;
+        }
+        if matches!(key.code, KeyCode::Char('s' | 'S')) {
+            self.mode = if self.mode == Mode::Select {
+                Mode::Delete
+            } else {
+                Mode::Select
+            };
+            if self.mode == Mode::Select {
+                self.selected.clear();
+                self.range_anchor = None;
+            }
+            return Action::None;
+        }
         if self.visible.is_empty() {
             return Action::None;
         }
@@ -160,17 +205,6 @@ impl State {
             KeyCode::Up | KeyCode::Char('k') => self.cursor = self.cursor.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => {
                 self.cursor = (self.cursor + 1).min(self.visible.len() - 1)
-            }
-            KeyCode::Char('d' | 'D') => {
-                self.mode = if self.mode == Mode::Select {
-                    Mode::Delete
-                } else {
-                    Mode::Select
-                };
-                if self.mode == Mode::Select {
-                    self.selected.clear();
-                    self.range_anchor = None;
-                }
             }
             KeyCode::Enter if self.mode == Mode::Select => return Action::Launch,
             KeyCode::Enter => {
@@ -343,8 +377,13 @@ pub fn render(frame: &mut Frame, state: &mut State, palette: &Palette) {
             );
         }
     }
+    let scope = if state.directory_scope == DirectoryScope::Cwd {
+        "CWD"
+    } else {
+        "All"
+    };
     let mut spans = vec![Span::styled(
-        " Agents: ",
+        format!(" D: {scope}  |  Agents: "),
         Style::default().add_modifier(Modifier::BOLD),
     )];
     for (index, agent) in Agent::ALL.into_iter().enumerate() {
@@ -385,8 +424,16 @@ pub fn render(frame: &mut Frame, state: &mut State, palette: &Palette) {
                 1,
             ),
         );
+        let mode_hint = if state.mode == Mode::Select {
+            "S: Delete mode"
+        } else {
+            "S: Select mode"
+        };
         frame.render_widget(
-            Paragraph::new("  1-4: Filter  |  ESC/Q: Quit").style(palette.accent(state.mode)),
+            Paragraph::new(format!(
+                "  D: CWD/All  |  1-4: Filter  |  {mode_hint}  |  ESC/Q: Quit"
+            ))
+            .style(palette.accent(state.mode)),
             status,
         );
         return;
@@ -599,13 +646,15 @@ fn draw_detail(frame: &mut Frame, session: &Session, area: Rect) {
 
 /// leave the alternate screen before the caller replaces this process
 pub fn run(paths: &DataPaths, sessions: Vec<Session>) -> Result<Option<Session>, String> {
+    let cwd = std::env::current_dir()
+        .map_err(|error| format!("Error: Cannot read the launch directory: {error}"))?;
     let colors = crossterm::style::available_color_count();
     let palette = Palette::new(if colors == u16::MAX {
         TRUE_COLOR_COUNT
     } else {
         u32::from(colors)
     });
-    let mut state = State::new(sessions);
+    let mut state = State::new(sessions, cwd);
     let interrupted = Arc::new(AtomicBool::new(false));
     let mut guard = TerminalGuard { signals: vec![] };
     for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {

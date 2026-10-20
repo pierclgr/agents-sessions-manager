@@ -2,7 +2,7 @@ mod common;
 
 use agents_sessions::{
     data::Agent,
-    tui::{Action, Mode, Palette, State, render},
+    tui::{Action, DirectoryScope, Mode, Palette, State, render},
 };
 use common::session;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -10,12 +10,15 @@ use ratatui::{Terminal, backend::TestBackend, style::Color};
 use std::collections::HashSet;
 
 fn state() -> State {
-    State::new(vec![
-        session(Agent::Claude, "c1"),
-        session(Agent::Codex, "x1"),
-        session(Agent::Claude, "c2"),
-        session(Agent::Pi, "p1"),
-    ])
+    State::new(
+        vec![
+            session(Agent::Claude, "c1"),
+            session(Agent::Codex, "x1"),
+            session(Agent::Claude, "c2"),
+            session(Agent::Pi, "p1"),
+        ],
+        "/p/proj".into(),
+    )
 }
 
 fn key(state: &mut State, code: KeyCode) -> Action {
@@ -37,9 +40,116 @@ fn all_agents_start_visible_and_number_keys_toggle_a_single_agent() {
 }
 
 #[test]
+fn startup_scope_matches_only_the_exact_launch_directory() {
+    let sessions = ["/p/proj", "/p/proj/child", "/p/proj-other", "/p"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, project)| {
+            let mut session = session(Agent::Claude, &format!("c{index}"));
+            session.project_path = project.into();
+            session
+        })
+        .collect();
+    let mut state = State::new(sessions, "/p/proj".into());
+    assert_eq!(state.directory_scope, DirectoryScope::Cwd);
+    assert_eq!(state.visible, vec![0]);
+    assert_eq!(state.all_sessions.len(), 4);
+    key(&mut state, KeyCode::Char('d'));
+    assert_eq!(state.directory_scope, DirectoryScope::All);
+    assert_eq!(state.visible, vec![0, 1, 2, 3]);
+    assert_eq!(state.mode, Mode::Select);
+    key(&mut state, KeyCode::Char('D'));
+    assert_eq!(state.directory_scope, DirectoryScope::Cwd);
+    assert_eq!(state.visible, vec![0]);
+}
+
+#[test]
+fn cwd_scope_matches_symlink_aliases_in_either_path() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    let alias = root.path().join("alias");
+    std::fs::create_dir(&project).unwrap();
+    std::os::unix::fs::symlink(&project, &alias).unwrap();
+    for (cwd, path) in [(project.clone(), alias.clone()), (alias, project)] {
+        let mut session = session(Agent::Claude, "c1");
+        session.project_path = path.clone();
+        let mut state = State::new(vec![session], cwd);
+        assert_eq!(state.visible, vec![0]);
+        assert_eq!(state.current().unwrap().project_path, path);
+        key(&mut state, KeyCode::Char('d'));
+        key(&mut state, KeyCode::Char('d'));
+        assert_eq!(state.visible, vec![0]);
+    }
+}
+
+#[test]
+fn directory_and_agent_filters_combine_in_both_modes() {
+    for mode in [Mode::Select, Mode::Delete] {
+        let mut elsewhere = session(Agent::Codex, "other");
+        elsewhere.project_path = "/elsewhere".into();
+        let mut state = State::new(
+            vec![
+                session(Agent::Claude, "c1"),
+                session(Agent::Codex, "x1"),
+                elsewhere,
+            ],
+            "/p/proj".into(),
+        );
+        state.mode = mode;
+        key(&mut state, KeyCode::Char('2'));
+        assert_eq!(state.visible, vec![1]);
+        key(&mut state, KeyCode::Char('d'));
+        assert_eq!(state.visible, vec![1, 2]);
+        assert_eq!(state.filters, HashSet::from([Agent::Codex]));
+        key(&mut state, KeyCode::Char('D'));
+        assert_eq!(state.visible, vec![1]);
+        key(&mut state, KeyCode::Char('2'));
+        assert_eq!(state.visible, vec![0, 1]);
+        assert_eq!(state.mode, mode);
+    }
+}
+
+#[test]
+fn both_toggles_work_with_empty_results_and_empty_data() {
+    for sessions in [vec![], vec![session(Agent::Claude, "c1")]] {
+        let mut state = State::new(sessions, "/elsewhere".into());
+        assert!(state.visible.is_empty());
+        key(&mut state, KeyCode::Char('s'));
+        assert_eq!(state.mode, Mode::Delete);
+        key(&mut state, KeyCode::Char('d'));
+        assert_eq!(state.directory_scope, DirectoryScope::All);
+        assert_eq!(state.visible.len(), state.all_sessions.len());
+        key(&mut state, KeyCode::Char('S'));
+        assert_eq!(state.mode, Mode::Select);
+        key(&mut state, KeyCode::Char('D'));
+        assert_eq!(state.directory_scope, DirectoryScope::Cwd);
+        assert!(state.visible.is_empty());
+    }
+}
+
+#[test]
+fn directory_filter_clamps_cursor_resets_scroll_and_drops_hidden_selections() {
+    let mut state = state();
+    state.all_sessions[3].project_path = "/elsewhere".into();
+    key(&mut state, KeyCode::Char('d'));
+    key(&mut state, KeyCode::Char('s'));
+    key(&mut state, KeyCode::Char('a'));
+    state.cursor = 3;
+    state.scroll_offset = 2;
+    key(&mut state, KeyCode::Char('D'));
+    assert_eq!(state.cursor, 2);
+    assert_eq!(state.scroll_offset, 0);
+    assert_eq!(state.selected.len(), 3);
+    assert!(!state.selected.contains(&(Agent::Pi, "p1".into())));
+    key(&mut state, KeyCode::Char('d'));
+    assert_eq!(state.visible.len(), 4);
+    assert_eq!(state.selected.len(), 3);
+}
+
+#[test]
 fn filtering_clamps_cursor_and_drops_hidden_selections() {
     let mut state = state();
-    key(&mut state, KeyCode::Char('d'));
+    key(&mut state, KeyCode::Char('s'));
     key(&mut state, KeyCode::Char('a'));
     state.cursor = 3;
     key(&mut state, KeyCode::Char('1'));
@@ -52,7 +162,7 @@ fn filtering_clamps_cursor_and_drops_hidden_selections() {
 #[test]
 fn select_all_toggles_only_visible_sessions() {
     let mut state = state();
-    key(&mut state, KeyCode::Char('d'));
+    key(&mut state, KeyCode::Char('s'));
     key(&mut state, KeyCode::Char('1'));
     key(&mut state, KeyCode::Char('A'));
     assert_eq!(state.selected.len(), 2);
@@ -63,7 +173,7 @@ fn select_all_toggles_only_visible_sessions() {
 #[test]
 fn deselected_anchor_is_ignored_by_range_select() {
     let mut state = state();
-    key(&mut state, KeyCode::Char('d'));
+    key(&mut state, KeyCode::Char('s'));
     key(&mut state, KeyCode::Tab);
     key(&mut state, KeyCode::Tab);
     key(&mut state, KeyCode::Down);
@@ -75,7 +185,7 @@ fn deselected_anchor_is_ignored_by_range_select() {
 #[test]
 fn tab_and_space_toggle_and_set_range_anchor() {
     let mut state = state();
-    key(&mut state, KeyCode::Char('d'));
+    key(&mut state, KeyCode::Char('s'));
     key(&mut state, KeyCode::Tab);
     assert_eq!(state.selected.len(), 1);
     key(&mut state, KeyCode::Char(' '));
@@ -87,7 +197,7 @@ fn tab_and_space_toggle_and_set_range_anchor() {
 fn shift_tab_selects_ranges_in_both_directions() {
     for (start, end) in [(0, 2), (3, 1)] {
         let mut state = state();
-        key(&mut state, KeyCode::Char('d'));
+        key(&mut state, KeyCode::Char('s'));
         state.cursor = start;
         key(&mut state, KeyCode::Tab);
         state.cursor = end;
@@ -99,7 +209,7 @@ fn shift_tab_selects_ranges_in_both_directions() {
 #[test]
 fn missing_or_hidden_range_anchor_selects_only_current() {
     let mut state = state();
-    key(&mut state, KeyCode::Char('d'));
+    key(&mut state, KeyCode::Char('s'));
     state.cursor = 1;
     key(&mut state, KeyCode::BackTab);
     assert_eq!(state.selected.len(), 1);
@@ -112,23 +222,21 @@ fn missing_or_hidden_range_anchor_selects_only_current() {
 #[test]
 fn leaving_delete_mode_clears_selection_and_anchor() {
     let mut state = state();
-    key(&mut state, KeyCode::Char('d'));
+    key(&mut state, KeyCode::Char('s'));
     key(&mut state, KeyCode::Tab);
-    key(&mut state, KeyCode::Char('D'));
+    key(&mut state, KeyCode::Char('S'));
     assert_eq!(state.mode, Mode::Select);
     assert!(state.selected.is_empty());
     assert!(state.range_anchor.is_none());
-    key(&mut state, KeyCode::Char('d'));
+    key(&mut state, KeyCode::Char('s'));
     state.cursor = 2;
     key(&mut state, KeyCode::BackTab);
     assert_eq!(state.selected.len(), 1);
 }
 
 #[test]
-fn unused_s_key_does_nothing_and_navigation_stays_in_bounds() {
+fn navigation_stays_in_bounds() {
     let mut state = state();
-    key(&mut state, KeyCode::Char('s'));
-    assert_eq!(state.mode, Mode::Select);
     key(&mut state, KeyCode::Up);
     assert_eq!(state.cursor, 0);
     for _ in 0..10 {
@@ -144,7 +252,11 @@ fn quit_keys_work_in_both_modes_and_empty_lists() {
     for code in [KeyCode::Esc, KeyCode::Char('q'), KeyCode::Char('Q')] {
         for empty in [false, true] {
             for delete in [false, true] {
-                let mut state = if empty { State::new(vec![]) } else { state() };
+                let mut state = if empty {
+                    State::new(vec![], "/p/proj".into())
+                } else {
+                    state()
+                };
                 if delete {
                     state.mode = Mode::Delete;
                 }
@@ -161,15 +273,21 @@ fn confirmation_quit_keys_only_cancel_and_yes_requests_deletion() {
         KeyCode::Char('q'),
         KeyCode::Char('Q'),
         KeyCode::Char('n'),
+        KeyCode::Char('d'),
+        KeyCode::Char('D'),
+        KeyCode::Char('s'),
+        KeyCode::Char('S'),
     ] {
         let mut state = state();
-        key(&mut state, KeyCode::Char('d'));
+        key(&mut state, KeyCode::Char('s'));
         key(&mut state, KeyCode::Tab);
         key(&mut state, KeyCode::Enter);
         assert!(state.confirming);
         assert_eq!(key(&mut state, code), Action::None);
         assert!(!state.confirming);
         assert_eq!(state.selected.len(), 1);
+        assert_eq!(state.mode, Mode::Delete);
+        assert_eq!(state.directory_scope, DirectoryScope::Cwd);
         key(&mut state, KeyCode::Enter);
         assert_eq!(key(&mut state, KeyCode::Char('Y')), Action::Delete);
     }
@@ -179,7 +297,7 @@ fn confirmation_quit_keys_only_cancel_and_yes_requests_deletion() {
 fn select_enter_launches_and_delete_enter_requires_a_selection() {
     let mut state = state();
     assert_eq!(key(&mut state, KeyCode::Enter), Action::Launch);
-    key(&mut state, KeyCode::Char('d'));
+    key(&mut state, KeyCode::Char('s'));
     assert_eq!(key(&mut state, KeyCode::Enter), Action::None);
     assert_eq!(state.message.as_deref(), Some("No sessions selected."));
 }
@@ -236,10 +354,13 @@ fn agent_names_have_colors_except_on_the_highlighted_row() {
 
 #[test]
 fn selected_markers_are_keyed_by_agent_and_id() {
-    let mut state = State::new(vec![
-        session(Agent::Claude, "same"),
-        session(Agent::Codex, "same"),
-    ]);
+    let mut state = State::new(
+        vec![
+            session(Agent::Claude, "same"),
+            session(Agent::Codex, "same"),
+        ],
+        "/p/proj".into(),
+    );
     state.mode = Mode::Delete;
     state.selected.insert((Agent::Codex, "same".into()));
     let terminal = screen(&mut state, 180, 30);
@@ -252,7 +373,11 @@ fn selected_markers_are_keyed_by_agent_and_id() {
 fn tiny_short_narrow_and_empty_screens_render_without_panics() {
     for (width, height) in [(0, 0), (1, 1), (19, 3), (20, 4), (50, 8), (60, 10)] {
         for empty in [false, true] {
-            let mut state = if empty { State::new(vec![]) } else { state() };
+            let mut state = if empty {
+                State::new(vec![], "/p/proj".into())
+            } else {
+                state()
+            };
             let terminal = screen(&mut state, width, height);
             if width == 50 {
                 assert!(!text(&terminal).contains("Session ID:"));
@@ -282,6 +407,7 @@ fn scroll_offset_keeps_cursor_visible() {
         (0..50)
             .map(|i| session(Agent::Pi, &format!("id-{i}")))
             .collect(),
+        "/p/proj".into(),
     );
     state.cursor = 49;
     screen(&mut state, 100, 15);
@@ -295,7 +421,7 @@ fn scroll_offset_keeps_cursor_visible() {
 fn modified_confirmation_keys_do_not_delete_sessions() {
     for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
         let mut state = state();
-        key(&mut state, KeyCode::Char('d'));
+        key(&mut state, KeyCode::Char('s'));
         key(&mut state, KeyCode::Tab);
         key(&mut state, KeyCode::Enter);
         let action = state.handle_key(KeyEvent::new(KeyCode::Char('y'), modifiers));
@@ -320,6 +446,31 @@ fn filter_labels_have_their_agent_colors() {
 }
 
 #[test]
+fn filter_bar_and_hints_show_directory_scope_and_new_mode_key() {
+    let mut state = state();
+    let select = text(&screen(&mut state, 180, 30));
+    assert!(select.contains("D: CWD"));
+    assert!(select.find("D: CWD").unwrap() < select.find("Agents:").unwrap());
+    assert!(select.contains("S: Delete mode"));
+    assert!(select.contains("D: CWD/All"));
+    key(&mut state, KeyCode::Char('d'));
+    key(&mut state, KeyCode::Char('s'));
+    let delete = text(&screen(&mut state, 240, 30));
+    assert!(delete.contains("D: All"));
+    assert!(delete.contains("S: Select mode"));
+    let narrow = text(&screen(&mut state, 20, 4));
+    assert!(narrow.contains("D: All"));
+
+    let mut empty = State::new(vec![], "/p/proj".into());
+    let rendered = text(&screen(&mut empty, 100, 8));
+    assert!(rendered.contains("D: CWD/All"));
+    assert!(rendered.contains("S: Delete mode"));
+    key(&mut empty, KeyCode::Char('s'));
+    let rendered = text(&screen(&mut empty, 100, 8));
+    assert!(rendered.contains("S: Select mode"));
+}
+
+#[test]
 fn unnamed_details_keep_the_full_id_and_recent_commands() {
     let mut s = session(Agent::Pi, "aaaaaaaa-0000-0000-0000-000000000001");
     s.commands = [
@@ -332,7 +483,7 @@ fn unnamed_details_keep_the_full_id_and_recent_commands() {
     ]
     .map(String::from)
     .to_vec();
-    let mut state = State::new(vec![s]);
+    let mut state = State::new(vec![s], "/p/proj".into());
     let terminal = screen(&mut state, 180, 40);
     let text = text(&terminal);
     assert!(!text.contains("Name:"));
@@ -362,20 +513,27 @@ fn deletion_reloads_sessions_keeps_filters_and_counts_failed_deletes() {
     fs::create_dir_all(&paths.codex).unwrap();
     let db = rusqlite::Connection::open(paths.codex.join("state_1.sqlite")).unwrap();
     db.execute_batch("CREATE TABLE threads (id TEXT,cwd TEXT,name TEXT,first_user_message TEXT,created_at_ms INTEGER,updated_at_ms INTEGER,archived INTEGER,thread_source TEXT);
-        INSERT INTO threads VALUES ('x','/p',NULL,'hi',1000,2000,0,'user');").unwrap();
-    let mut state = State::new(load_all_sessions(&paths).unwrap());
-    key(&mut state, KeyCode::Char('2'));
-    key(&mut state, KeyCode::Char('d'));
-    key(&mut state, KeyCode::Char('a'));
-    state.delete_selected(&paths, &FailingRunner).unwrap();
-    assert_eq!(state.all_sessions.len(), 2);
-    assert_eq!(state.visible.len(), 1);
-    assert_eq!(state.mode, Mode::Select);
-    assert!(state.selected.is_empty());
-    assert!(state.range_anchor.is_none());
-    assert_eq!(state.filters, HashSet::from([Agent::Codex]));
-    assert_eq!(
-        state.message.as_deref(),
-        Some("Deleted 0 session(s). 1 error(s): cannot delete")
-    );
+        INSERT INTO threads VALUES ('x','/p',NULL,'hi',1000,2000,0,'user');
+        INSERT INTO threads VALUES ('other','/elsewhere',NULL,'hi',1000,2000,0,'user');").unwrap();
+    for (scope, count) in [(DirectoryScope::Cwd, 1), (DirectoryScope::All, 2)] {
+        let mut state = State::new(load_all_sessions(&paths).unwrap(), "/p".into());
+        if scope == DirectoryScope::All {
+            key(&mut state, KeyCode::Char('d'));
+        }
+        key(&mut state, KeyCode::Char('2'));
+        key(&mut state, KeyCode::Char('s'));
+        key(&mut state, KeyCode::Tab);
+        state.delete_selected(&paths, &FailingRunner).unwrap();
+        assert_eq!(state.all_sessions.len(), 3);
+        assert_eq!(state.visible.len(), count);
+        assert_eq!(state.mode, Mode::Select);
+        assert_eq!(state.directory_scope, scope);
+        assert!(state.selected.is_empty());
+        assert!(state.range_anchor.is_none());
+        assert_eq!(state.filters, HashSet::from([Agent::Codex]));
+        assert_eq!(
+            state.message.as_deref(),
+            Some("Deleted 0 session(s). 1 error(s): cannot delete")
+        );
+    }
 }
