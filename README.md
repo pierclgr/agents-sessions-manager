@@ -266,6 +266,8 @@ targets are reflected when the filter is applied again.
 Database providers transfer prompt lists into sessions without copying them.
 OpenCode restricts message loading to active top-level sessions before
 decoding message JSON, keeping prompt order and empty-session filtering.
+The TUI draws on startup, keyboard input and resize events. Idle polling
+checks for interruption without rebuilding the screen.
 
 ## Running Tests
 

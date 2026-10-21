@@ -671,24 +671,36 @@ pub fn run(paths: &DataPaths, sessions: Vec<Session>) -> Result<Option<Session>,
     let mut terminal =
         ratatui::try_init().map_err(|error| format!("Error: Cannot open the terminal: {error}"))?;
     let result = (|| -> io::Result<Option<Session>> {
+        // subscribe to resize events before the first frame becomes visible
+        event::poll(Duration::ZERO)?;
+        let mut redraw = true;
         loop {
             if interrupted.load(Ordering::Relaxed) {
                 return Ok(None);
             }
-            if let Some(index) = state.visible.get(state.cursor).copied() {
-                let session = &mut state.all_sessions[index];
-                if state.enriched_key.as_ref() != Some(&session.key()) {
-                    provider(session.agent).load_detail(session, paths);
-                    state.enriched_key = Some(session.key());
+            if redraw {
+                if let Some(index) = state.visible.get(state.cursor).copied() {
+                    let session = &mut state.all_sessions[index];
+                    if state.enriched_key.as_ref() != Some(&session.key()) {
+                        provider(session.agent).load_detail(session, paths);
+                        state.enriched_key = Some(session.key());
+                    }
                 }
+                terminal.draw(|frame| render(frame, &mut state, &palette))?;
+                redraw = false;
             }
-            terminal.draw(|frame| render(frame, &mut state, &palette))?;
             if !event::poll(POLL_INTERVAL)? {
                 continue;
             }
-            let Event::Key(key) = event::read()? else {
-                continue;
+            let key = match event::read()? {
+                Event::Key(key) => key,
+                Event::Resize(_, _) => {
+                    redraw = true;
+                    continue;
+                }
+                _ => continue,
             };
+            redraw = true;
             match state.handle_key(key) {
                 Action::Quit => return Ok(None),
                 Action::Launch => {

@@ -174,6 +174,38 @@ fn empty_browser_quits_cleanly() {
 }
 
 #[test]
+fn resizing_an_idle_browser_updates_the_screen_without_a_key() {
+    let root = tempfile::tempdir().unwrap();
+    history(root.path(), root.path());
+    let mut browser = Browser::start(root.path(), &[], None);
+    browser.wait_for("MODE: SELECT");
+    browser.text.clear();
+    browser
+        .master
+        .resize(PtySize {
+            rows: 2,
+            cols: 10,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    browser.wait_for("Terminal");
+    browser.text.clear();
+    browser
+        .master
+        .resize(PtySize {
+            rows: 35,
+            cols: 180,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    browser.wait_for("MODE: SELECT");
+    browser.input("q");
+    browser.finish(0, true);
+}
+
+#[test]
 fn directory_toggle_reveals_other_projects_without_switching_mode() {
     let root = tempfile::tempdir().unwrap();
     let project = root.path().join("project");
