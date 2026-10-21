@@ -25,6 +25,58 @@ struct HistoryEntry {
     project: String,
 }
 
+/// reuse a filename inventory while checking each candidate against the filesystem
+pub(crate) struct TranscriptIndex {
+    projects: PathBuf,
+    directories: Option<HashMap<String, Vec<PathBuf>>>,
+}
+
+impl TranscriptIndex {
+    pub(crate) fn new(root: &Path) -> Self {
+        let projects = root.join("projects");
+        // retain project order and let the filesystem decide case-sensitive matches
+        let directories = (|| {
+            let mut directories: HashMap<String, Vec<PathBuf>> = HashMap::new();
+            for directory in children(&projects) {
+                if !std::fs::symlink_metadata(&directory).is_ok_and(|metadata| metadata.is_dir()) {
+                    continue;
+                }
+                for entry in std::fs::read_dir(&directory).ok()? {
+                    let filename = entry.ok()?.file_name();
+                    let filename = filename.to_str()?;
+                    // keep the original lookup when a listing cannot represent every name
+                    if !filename.is_ascii() {
+                        return None;
+                    }
+                    let filename = filename.to_ascii_lowercase();
+                    if filename.ends_with(".jsonl") {
+                        directories
+                            .entry(filename)
+                            .or_default()
+                            .push(directory.clone());
+                    }
+                }
+            }
+            Some(directories)
+        })();
+        Self {
+            projects,
+            directories,
+        }
+    }
+
+    pub(crate) fn find(&self, id: &str) -> Option<PathBuf> {
+        match &self.directories {
+            Some(directories) if id.is_ascii() && !id.contains('/') => {
+                let filename = format!("{id}.jsonl").to_ascii_lowercase();
+                let candidates = directories.get(&filename).into_iter().flatten().cloned();
+                transcript_in_projects(id, &self.projects, candidates)
+            }
+            _ => transcript_in_projects(id, &self.projects, children(&self.projects).into_iter()),
+        }
+    }
+}
+
 pub(crate) fn transcript(id: &str, root: &Path) -> Option<PathBuf> {
     let projects = root.join("projects");
     transcript_in_projects(id, &projects, children(&projects).into_iter())
@@ -109,32 +161,7 @@ impl AgentProvider for Claude {
         if groups.is_empty() {
             return Ok(vec![]);
         }
-        let projects = paths.claude.join("projects");
-        // retain project order and let the filesystem decide case-sensitive matches
-        let transcript_directories = (|| {
-            let mut directories: HashMap<String, Vec<PathBuf>> = HashMap::new();
-            for directory in children(&projects) {
-                if !std::fs::symlink_metadata(&directory).is_ok_and(|metadata| metadata.is_dir()) {
-                    continue;
-                }
-                for entry in std::fs::read_dir(&directory).ok()? {
-                    let filename = entry.ok()?.file_name();
-                    let filename = filename.to_str()?;
-                    // keep the original lookup when a listing cannot represent every name
-                    if !filename.is_ascii() {
-                        return None;
-                    }
-                    let filename = filename.to_ascii_lowercase();
-                    if filename.ends_with(".jsonl") {
-                        directories
-                            .entry(filename)
-                            .or_default()
-                            .push(directory.clone());
-                    }
-                }
-            }
-            Some(directories)
-        })();
+        let transcripts = TranscriptIndex::new(&paths.claude);
         let mut sessions = Vec::new();
         for (id, mut entries) in groups {
             entries.sort_by_key(|entry| entry.timestamp);
@@ -142,15 +169,7 @@ impl AgentProvider for Claude {
             let last = entries.last().unwrap();
             let mut custom = None;
             let mut generated = None;
-            let path = match &transcript_directories {
-                Some(directories) if id.is_ascii() && !id.contains('/') => {
-                    let filename = format!("{id}.jsonl").to_ascii_lowercase();
-                    let candidates = directories.get(&filename).into_iter().flatten().cloned();
-                    transcript_in_projects(&id, &projects, candidates)
-                }
-                _ => transcript(&id, &paths.claude),
-            };
-            if let Some(path) = path {
+            if let Some(path) = transcripts.find(&id) {
                 // avoid decoding full conversation messages when only the name is needed
                 let _ = visit_jsonl_matching(&path, &TITLE_MARKERS, |entry| {
                     match entry["type"].as_str() {

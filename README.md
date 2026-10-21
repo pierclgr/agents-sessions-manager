@@ -230,8 +230,8 @@ instead of searching every project for each session. Duplicate IDs still use
 the first matching project in sorted path order. Project-directory symlinks
 are skipped, and transcript targets must stay within `projects/`. The original
 lookup handles unreadable directory listings, non-ASCII filenames and unusual
-IDs, keeping filesystem name matching unchanged. Detail loading and deletion
-keep their existing lookup.
+IDs, keeping filesystem name matching unchanged. Detail loading keeps its
+direct lookup; a deletion batch shares one transcript index.
 
 **Claude Code session deletion** removes:
 
@@ -241,6 +241,13 @@ keep their existing lookup.
 4. The project folder under `projects/`, only if it is now empty: the project memory (`memory/`) is kept.
 
 Background sessions (started with `claude --bg`) are first removed with `claude rm <ID>`, which also cleans the daemon state. If this fails, the session is not deleted at all.
+
+Batch deletion lists Pi session files once. Claude batches collect matching
+artifacts in one directory walk and index background jobs, refreshing that
+index after each external command. Shared-plan references are read once when
+needed and checked against files that remain after each deletion. Deletions
+keep their input order, path checks and error handling; a failed deletion or
+an unreadable remaining transcript still protects its shared plan.
 
 ## Running Tests
 

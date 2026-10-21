@@ -1,12 +1,12 @@
 //! local deletion of session artifacts, with shared-data and root checks
 
-use super::{Session, agents::transcript};
+use super::{Session, agents::TranscriptIndex};
 use crate::utils::{
     CommandRunner, children, is_within, project_files, remove_jsonl_lines, visit_jsonl,
 };
 use serde_json::Value;
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet, VecDeque},
     fs, io,
     path::{Path, PathBuf},
 };
@@ -18,27 +18,41 @@ pub fn claude_sessions(
 ) -> Vec<String> {
     let mut errors = Vec::new();
     let mut deletable = Vec::new();
+    let mut jobs = None;
     for session in sessions {
-        let job = project_files(&root.join("jobs"), "json")
-            .into_iter()
-            .find(|path| {
-                path.file_name().is_some_and(|name| name == "state.json")
-                    && fs::read(path)
+        let job = jobs
+            .get_or_insert_with(|| {
+                let mut jobs = HashMap::new();
+                for path in project_files(&root.join("jobs"), "json") {
+                    if !path.file_name().is_some_and(|name| name == "state.json") {
+                        continue;
+                    }
+                    let Some(entry) = fs::read(&path)
                         .ok()
                         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-                        .is_some_and(|value| {
-                            value["sessionId"].as_str() == Some(&session.session_id)
-                        })
-            });
-        if let Some(job) = job
-            && let Err(error) = runner.run(&[
+                    else {
+                        continue;
+                    };
+                    if let Some(id) = entry["sessionId"].as_str() {
+                        jobs.entry(id.to_owned()).or_insert(path);
+                    }
+                }
+                jobs
+            })
+            .get(&session.session_id)
+            .cloned();
+        if let Some(job) = job {
+            let result = runner.run(&[
                 "claude".into(),
                 "rm".into(),
                 job.parent().unwrap().file_name().unwrap().into(),
-            ])
-        {
-            errors.push(error);
-            continue;
+            ]);
+            // agent commands may change other jobs even when they report failure
+            jobs = None;
+            if let Err(error) = result {
+                errors.push(error);
+                continue;
+            }
         }
         deletable.push(*session);
     }
@@ -62,40 +76,34 @@ pub fn claude_sessions(
         }
     };
     delete_unused_pastes(&removed, &history, root, &mut errors);
+    let transcripts = TranscriptIndex::new(root);
+    let projects = root.join("projects");
+    let mut plan_references: Option<PlanReferences> = None;
+    let mut artifacts = HashMap::new();
+    find_artifacts(root, &ids, &mut artifacts);
+    for matches in artifacts.values_mut() {
+        matches.sort();
+    }
     for session in deletable {
-        let path = transcript(&session.session_id, root);
-        let mut slug = None;
+        let path = transcripts.find(&session.session_id);
+        let slug = path.as_ref().and_then(|path| {
+            if let Some(references) = &plan_references
+                && let Some(slug) = references.first_slugs.get(path)
+            {
+                return slug.clone();
+            }
+            read_transcript_plans(path).first_slug
+        });
         if let Some(path) = &path {
-            let _ = visit_jsonl(path, |entry| {
-                if slug.is_none() {
-                    slug = entry["slug"]
-                        .as_str()
-                        .filter(|name| safe_name(name))
-                        .map(String::from);
-                }
-            });
             remove_artifact(path, root, &mut errors);
             remove_artifact(&path.with_extension(""), root, &mut errors);
         }
-        let mut artifacts = Vec::new();
-        find_artifacts(root, &session.session_id, &mut artifacts);
-        artifacts.sort();
-        for artifact in artifacts {
-            remove_artifact(&artifact, root, &mut errors);
+        for artifact in artifacts.get(&session.session_id).into_iter().flatten() {
+            remove_artifact(artifact, root, &mut errors);
         }
         if let Some(slug) = slug {
-            // retain a shared plan when another transcript cannot be checked
-            let in_use = project_files(&root.join("projects"), "jsonl")
-                .iter()
-                .any(|path| {
-                    let mut found = false;
-                    visit_jsonl(path, |entry| {
-                        found |= entry["slug"].as_str() == Some(&slug);
-                    })
-                    .is_err()
-                        || found
-                });
-            if !in_use {
+            let references = plan_references.get_or_insert_with(|| PlanReferences::new(&projects));
+            if !references.in_use(&slug, &projects) {
                 remove_artifact(
                     &root.join("plans").join(format!("{slug}.md")),
                     root,
@@ -120,19 +128,101 @@ fn safe_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
 }
 
-fn find_artifacts(directory: &Path, id: &str, matches: &mut Vec<PathBuf>) {
+struct TranscriptPlans {
+    first_slug: Option<String>,
+    slugs: HashSet<String>,
+    readable: bool,
+}
+
+fn read_transcript_plans(path: &Path) -> TranscriptPlans {
+    let mut first_slug = None;
+    let mut slugs = HashSet::new();
+    let readable = visit_jsonl(path, |entry| {
+        if let Some(slug) = entry["slug"].as_str().filter(|name| safe_name(name)) {
+            if first_slug.is_none() {
+                first_slug = Some(slug.to_owned());
+            }
+            slugs.insert(slug.to_owned());
+        }
+    })
+    .is_ok();
+    TranscriptPlans {
+        first_slug,
+        slugs,
+        readable,
+    }
+}
+
+struct PlanReferences {
+    first_slugs: HashMap<PathBuf, Option<String>>,
+    by_slug: HashMap<String, VecDeque<PathBuf>>,
+    unreadable: VecDeque<PathBuf>,
+}
+
+impl PlanReferences {
+    fn new(projects: &Path) -> Self {
+        let mut references = Self {
+            first_slugs: HashMap::new(),
+            by_slug: HashMap::new(),
+            unreadable: VecDeque::new(),
+        };
+        for path in project_files(projects, "jsonl") {
+            let plans = read_transcript_plans(&path);
+            references
+                .first_slugs
+                .insert(path.clone(), plans.first_slug);
+            for slug in plans.slugs {
+                references
+                    .by_slug
+                    .entry(slug)
+                    .or_default()
+                    .push_back(path.clone());
+            }
+            if !plans.readable {
+                references.unreadable.push_back(path);
+            }
+        }
+        references
+    }
+
+    fn in_use(&mut self, slug: &str, projects: &Path) -> bool {
+        self.by_slug
+            .get_mut(slug)
+            .is_some_and(|paths| live_reference(paths, projects))
+            || live_reference(&mut self.unreadable, projects)
+    }
+}
+
+fn live_reference(paths: &mut VecDeque<PathBuf>, projects: &Path) -> bool {
+    while let Some(path) = paths.front() {
+        if path.is_file() && is_within(path, projects) {
+            return true;
+        }
+        // discard removed references so later sessions do not check them again
+        paths.pop_front();
+    }
+    false
+}
+
+fn find_artifacts(
+    directory: &Path,
+    ids: &HashSet<String>,
+    matches: &mut HashMap<String, Vec<PathBuf>>,
+) {
     for path in children(directory) {
         let Ok(metadata) = fs::symlink_metadata(&path) else {
             continue;
         };
-        if path
-            .file_name()
-            .is_some_and(|name| name != "history.jsonl" && name.to_string_lossy().contains(id))
-        {
-            matches.push(path.clone());
+        if let Some(name) = path.file_name().filter(|name| *name != "history.jsonl") {
+            let name = name.to_string_lossy();
+            for id in ids {
+                if name.contains(id) {
+                    matches.entry(id.clone()).or_default().push(path.clone());
+                }
+            }
         }
         if metadata.is_dir() {
-            find_artifacts(&path, id, matches);
+            find_artifacts(&path, ids, matches);
         }
     }
 }

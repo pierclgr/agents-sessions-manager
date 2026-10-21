@@ -14,12 +14,17 @@ use std::{
 
 pub struct Pi;
 
-fn session_file(id: &str, root: &Path) -> Option<PathBuf> {
+fn session_file(id: &str, root: &Path, files: &[PathBuf]) -> Option<PathBuf> {
     let suffix = format!("_{id}.jsonl");
-    project_files(root, "jsonl").into_iter().find(|path| {
-        path.file_name()
-            .is_some_and(|name| name.to_string_lossy().ends_with(&suffix))
-    })
+    files
+        .iter()
+        .find(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().ends_with(&suffix))
+                && path.is_file()
+                && is_within(path, root)
+        })
+        .cloned()
 }
 
 fn parse_file(path: &Path) -> Option<Session> {
@@ -97,9 +102,13 @@ impl AgentProvider for Pi {
         paths: &DataPaths,
         _runner: &dyn CommandRunner,
     ) -> Vec<String> {
+        if sessions.is_empty() {
+            return vec![];
+        }
+        let files = project_files(&paths.pi_sessions, "jsonl");
         let mut errors = Vec::new();
         for session in sessions {
-            let Some(path) = session_file(&session.session_id, &paths.pi_sessions) else {
+            let Some(path) = session_file(&session.session_id, &paths.pi_sessions, &files) else {
                 errors.push(format!(
                     "Pi session file not found for {}",
                     session.session_id
@@ -120,9 +129,13 @@ impl AgentProvider for Pi {
     }
 
     fn resume_command(&self, session: &Session, paths: &DataPaths) -> Vec<OsString> {
-        let target = session_file(&session.session_id, &paths.pi_sessions)
-            .map(PathBuf::into_os_string)
-            .unwrap_or_else(|| session.session_id.clone().into());
+        let target = session_file(
+            &session.session_id,
+            &paths.pi_sessions,
+            &project_files(&paths.pi_sessions, "jsonl"),
+        )
+        .map(PathBuf::into_os_string)
+        .unwrap_or_else(|| session.session_id.clone().into());
         vec!["pi".into(), "--session".into(), target]
     }
 }

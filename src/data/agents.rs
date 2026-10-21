@@ -5,7 +5,7 @@ mod codex;
 mod opencode;
 mod pi;
 
-pub(crate) use claude::transcript;
+pub(crate) use claude::TranscriptIndex;
 
 use super::{Agent, DataPaths, Session};
 use crate::utils::CommandRunner;
