@@ -258,6 +258,9 @@ succeed. Removed JSON records remain available for cleanup of shared data.
 Claude's paste-cache check also reads the remaining history line by line,
 retaining a pasted file whenever its hash occurs anywhere in that text.
 
+Message previews inspect only enough Unicode characters to fit the display
+limit, keeping the existing ellipsis and character boundaries for long text.
+
 ## Running Tests
 
 The tests build fake agent data in temporary directories. Agent commands are

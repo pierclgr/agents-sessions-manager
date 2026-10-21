@@ -15,13 +15,19 @@ use std::{
 pub const SHORT_ID_LENGTH: usize = 8;
 
 pub fn truncate(text: &str, limit: usize) -> String {
-    if text.chars().count() <= limit {
-        return text.into();
-    }
     if limit == 0 {
         return String::new();
     }
-    text.chars().take(limit - 1).chain(['…']).collect()
+    let mut characters = text.char_indices();
+    let Some((last_character, _)) = characters.nth(limit - 1) else {
+        return text.into();
+    };
+    if characters.next().is_none() {
+        return text.into();
+    }
+    let mut preview = text[..last_character].to_owned();
+    preview.push('…');
+    preview
 }
 
 pub fn format_datetime(date: DateTime<Utc>) -> String {
