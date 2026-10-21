@@ -27,6 +27,8 @@ Works on **macOS** and **Linux**. SQLite is bundled into the executable.
 - **Agent filter** -- Press `1`-`4` to show only the sessions of one agent; press the same key again to show all agents, in both modes
 - **Directory filter** -- Starts with sessions from the launch directory.
   Press `F` to toggle between CWD and all directories, in both modes
+- **Search** -- Press `Ctrl+F` to search names, project paths, session IDs,
+  and modified dates within the current filters; press it again to clear
 - **Agent colors** -- Each agent name has its own color in the list and in the filter bar: Claude orange, Codex light blue, OpenCode light green, Pi light magenta (red, cyan, green and magenta when the terminal cannot define custom colors)
 - **Session names** -- Shows the name of a session, either the one you set (e.g. `/rename`) or the one the agent generated; sessions without a name show their ID
 - **CLI subcommands** -- Non-interactive `ls`, `launch`, and `delete` commands for scripting and quick access
@@ -125,10 +127,11 @@ SELECT mode uses a muted orange (`#A36847`) accent with white text (gray when cu
 
 | Key              | Action                        |
 | ---------------- | ----------------------------- |
-| `Up` / `k`       | Move cursor up                |
-| `Down` / `j`     | Move cursor down              |
+| `Up`             | Move cursor up                |
+| `Down`           | Move cursor down              |
 | `1` - `4`        | Show/hide Claude, Codex, OpenCode, Pi sessions |
 | `F`              | Toggle CWD / all directories   |
+| `Ctrl+F`         | Toggle search; clear query when leaving |
 | `Enter`          | Resume the highlighted session |
 | `D`              | Switch to DELETE mode          |
 | `Esc` / `Q`      | Quit                          |
@@ -137,12 +140,13 @@ SELECT mode uses a muted orange (`#A36847`) accent with white text (gray when cu
 
 | Key              | Action                               |
 | ---------------- | ------------------------------------ |
-| `Up` / `k`       | Move cursor up                       |
-| `Down` / `j`     | Move cursor down                     |
+| `Up`             | Move cursor up                       |
+| `Down`           | Move cursor down                     |
 | `1` - `4`        | Show/hide Claude, Codex, OpenCode, Pi sessions (hidden sessions are unselected) |
 | `F`              | Toggle CWD / all; unselect hidden sessions |
-| `Tab` / `Space`  | Toggle selection on current session  |
-| `Shift+Tab`      | Select all sessions from the last one toggled with `Tab`/`Space` to the cursor |
+| `Ctrl+F`         | Toggle search; clear query when leaving |
+| `Tab`            | Toggle selection on current session  |
+| `Shift+Tab`      | Select all sessions from the last one toggled with `Tab` to the cursor |
 | `A`              | Select all shown sessions (press again to clear the selection) |
 | `Enter`          | Delete selected sessions (with confirmation; `Esc` cancels) |
 | `D`              | Switch back to SELECT mode           |
@@ -151,6 +155,39 @@ SELECT mode uses a muted orange (`#A36847`) accent with white text (gray when cu
 `F`, `D`, and `Q` also work in lowercase. The directory and mode toggles
 work when no sessions are shown. During delete confirmation, `Esc`, `Q`,
 and the toggle keys cancel the prompt without changing the filters or mode.
+
+#### Search
+
+Press `Ctrl+F` in either mode to filter as you type. Search includes all
+sessions allowed by the current directory and agent filters, including rows
+below the screen. It matches the full session name, project path, session ID,
+or modified date/time, without case sensitivity. Messages are not searched.
+The existing activity order is kept. An empty query shows all sessions allowed
+by the current filters.
+
+Modified dates use the displayed local format, `YYYY-MM-DD HH:MM`, and match
+as text. For example, `10` matches anywhere in the date/time, and `10-2`
+matches October 20–29. Whole queries also support `today`, `yesterday`,
+`this week`, `last week`, `this month`, `last month`, `this year`, and
+`last year`. These use local calendar periods, with weeks starting Monday.
+Literal matches in names, paths, and IDs still count for calendar queries.
+
+During search, letters, numbers, symbols, and spaces enter text instead of
+running shortcuts. `Backspace` removes the last character. `Up` and `Down`
+still navigate, and `Enter` still resumes a session or asks to delete selected
+sessions, depending on the mode. In DELETE mode, `Tab` and `Shift+Tab` still
+select sessions; hidden sessions are unselected. `Esc` and `Ctrl+C` quit.
+Delete confirmation takes priority over search input; `Ctrl+F` during a
+confirmation only cancels the prompt. Press `Ctrl+F` again outside confirmation
+to clear the query and restore normal controls. `j` and `k` do not navigate,
+and Space does not select sessions outside search.
+
+Search uses the existing session metadata and one pass over the current
+candidates per query update. Missing Claude names are loaded once when search
+starts, including names outside the viewport. Query edits reuse these names
+and candidates without reading transcripts or checking directories again for
+search. Keep this implementation lightweight: no new dependencies, persistent
+index, or background search service.
 
 ### CLI Subcommands
 

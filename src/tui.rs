@@ -1,5 +1,7 @@
 //! terminal rendering and a testable state machine
 
+mod search;
+
 use crate::{
     data::{
         Agent, DataPaths, RECENT_COMMAND_LIMIT, Session, SessionKey,
@@ -7,6 +9,7 @@ use crate::{
     },
     utils::{CommandRunner, ProcessRunner, SHORT_ID_LENGTH, format_datetime, truncate},
 };
+use chrono::Local;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
     Frame,
@@ -15,6 +18,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
+use search::{Candidate, calendar_period};
 use std::{
     collections::{HashMap, HashSet},
     io,
@@ -47,8 +51,9 @@ const SELECT_ACCENT: Color = Color::Rgb(202, 124, 94);
 const DELETE_ACCENT: Color = Color::Rgb(55, 6, 3);
 const COLUMN_GAP: usize = 2;
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
-const SELECT_HINTS: &str = " MODE: SELECT  |  ↑/↓ Navigate  |  F: CWD/All  |  1-4: Filter  |  Enter: Resume session  |  D: Delete mode  |  ESC/Q: Quit";
-const DELETE_HINTS: &str = " MODE: DELETE  |  ↑/↓ Navigate  |  F: CWD/All  |  1-4: Filter  |  Tab/Space: Toggle select  |  Shift+Tab: Select range  |  A: Select all  |  Enter: Delete selected  |  D: Select mode  |  ESC/Q: Quit";
+const SEARCH_PREFIX: &str = " Search: ";
+const SELECT_HINTS: &str = " MODE: SELECT  |  Ctrl+F: Search  |  ↑/↓ Navigate  |  F: CWD/All  |  1-4: Filter  |  Enter: Resume session  |  D: Delete mode  |  ESC/Q: Quit";
+const DELETE_HINTS: &str = " MODE: DELETE  |  Ctrl+F: Search  |  ↑/↓ Navigate  |  F: CWD/All  |  1-4: Filter  |  Tab: Toggle select  |  Shift+Tab: Select range  |  A: Select all  |  Enter: Delete selected  |  D: Select mode  |  ESC/Q: Quit";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DirectoryScope {
@@ -82,9 +87,13 @@ pub struct State {
     pub range_anchor: Option<SessionKey>,
     pub message: Option<String>,
     pub confirming: bool,
+    pub search_active: bool,
+    pub search_query: String,
     cwd: PathBuf,
     enriched_key: Option<SessionKey>,
     named: HashSet<SessionKey>,
+    search_candidates: Vec<Candidate>,
+    search_names_pending: bool,
 }
 
 impl State {
@@ -102,9 +111,13 @@ impl State {
             range_anchor: None,
             message: None,
             confirming: false,
+            search_active: false,
+            search_query: String::new(),
             cwd,
             enriched_key: None,
             named: HashSet::new(),
+            search_candidates: Vec::new(),
+            search_names_pending: false,
         };
         state.apply_filter();
         state
@@ -116,24 +129,46 @@ impl State {
             .map(|index| &self.all_sessions[*index])
     }
 
-    /// load transcript names only for rows that the next frame will display
+    /// load viewport names normally, or all current candidates during search
     pub fn prepare_frame(&mut self, paths: &DataPaths, area: Rect) {
         let rows = session_row_count(area);
-        if rows == 0 || self.visible.is_empty() {
+        if rows == 0 || (self.search_active && !self.search_names_pending) {
             return;
         }
         self.fit_cursor(rows);
-        let indices: Vec<_> = self
-            .visible
-            .iter()
-            .skip(self.scroll_offset)
-            .take(rows)
-            .copied()
-            .filter(|index| !self.named.contains(&self.all_sessions[*index].key()))
-            .collect();
+        // search candidates must be independent of provisional query results
+        let indices: Vec<_> = if self.search_active {
+            self.search_candidates
+                .iter()
+                .map(|candidate| candidate.index)
+                .filter(|index| !self.named.contains(&self.all_sessions[*index].key()))
+                .collect()
+        } else {
+            self.visible
+                .iter()
+                .skip(self.scroll_offset)
+                .take(rows)
+                .copied()
+                .filter(|index| !self.named.contains(&self.all_sessions[*index].key()))
+                .collect()
+        };
+        self.search_names_pending = false;
+        if indices.is_empty() {
+            return;
+        }
         load_session_names(&mut self.all_sessions, &indices, paths);
         for index in indices {
             self.named.insert(self.all_sessions[index].key());
+        }
+        if self.search_active {
+            for candidate in &mut self.search_candidates {
+                candidate.name = self.all_sessions[candidate.index]
+                    .name
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_lowercase();
+            }
+            self.apply_search();
         }
     }
 
@@ -168,12 +203,46 @@ impl State {
             })
             .map(|(index, _)| index)
             .collect();
-        let visible_keys: HashSet<_> = self
+        if self.search_active {
+            self.cache_search_candidates();
+            self.apply_search();
+        } else {
+            self.reconcile_visible();
+        }
+    }
+
+    fn cache_search_candidates(&mut self) {
+        self.search_candidates = self
             .visible
             .iter()
-            .map(|index| self.all_sessions[*index].key())
+            .map(|index| Candidate::new(*index, &self.all_sessions[*index]))
             .collect();
-        self.selected.retain(|key| visible_keys.contains(key));
+        self.search_names_pending = true;
+    }
+
+    /// query edits only scan cached metadata, without filesystem or database work
+    fn apply_search(&mut self) {
+        let query = self.search_query.to_lowercase();
+        let period = calendar_period(&query, Local::now().date_naive());
+        self.visible.clear();
+        self.visible.extend(
+            self.search_candidates
+                .iter()
+                .filter(|candidate| candidate.matches(&query, period.as_ref()))
+                .map(|candidate| candidate.index),
+        );
+        self.reconcile_visible();
+    }
+
+    fn reconcile_visible(&mut self) {
+        if !self.selected.is_empty() {
+            let visible_keys: HashSet<_> = self
+                .visible
+                .iter()
+                .map(|index| self.all_sessions[*index].key())
+                .collect();
+            self.selected.retain(|key| visible_keys.contains(key));
+        }
         self.cursor = self.cursor.min(self.visible.len().saturating_sub(1));
         self.scroll_offset = 0;
     }
@@ -197,7 +266,45 @@ impl State {
             };
         }
         self.message = None;
+        if key.modifiers.difference(KeyModifiers::SHIFT) == KeyModifiers::CONTROL
+            && matches!(key.code, KeyCode::Char('f' | 'F'))
+        {
+            if key.kind != KeyEventKind::Press {
+                return Action::None;
+            }
+            self.search_active = !self.search_active;
+            self.search_query.clear();
+            self.cursor = 0;
+            if self.search_active {
+                self.cache_search_candidates();
+            } else {
+                self.visible = self
+                    .search_candidates
+                    .iter()
+                    .map(|candidate| candidate.index)
+                    .collect();
+                self.search_candidates.clear();
+                self.search_names_pending = false;
+            }
+            self.reconcile_visible();
+            return Action::None;
+        }
         if !key.modifiers.difference(KeyModifiers::SHIFT).is_empty() {
+            return Action::None;
+        }
+        if key.code == KeyCode::Esc {
+            return Action::Quit;
+        }
+        if self.search_active {
+            match key.code {
+                KeyCode::Char(character) => self.search_query.push(character),
+                KeyCode::Backspace => {
+                    self.search_query.pop();
+                }
+                _ => return self.handle_list_key(key.code),
+            }
+            self.cursor = 0;
+            self.apply_search();
             return Action::None;
         }
         if let KeyCode::Char(number @ '1'..='4') = key.code {
@@ -211,7 +318,7 @@ impl State {
             self.apply_filter();
             return Action::None;
         }
-        if matches!(key.code, KeyCode::Esc | KeyCode::Char('q' | 'Q')) {
+        if matches!(key.code, KeyCode::Char('q' | 'Q')) {
             return Action::Quit;
         }
         if matches!(key.code, KeyCode::Char('f' | 'F')) {
@@ -235,14 +342,16 @@ impl State {
             }
             return Action::None;
         }
+        self.handle_list_key(key.code)
+    }
+
+    fn handle_list_key(&mut self, code: KeyCode) -> Action {
         if self.visible.is_empty() {
             return Action::None;
         }
-        match key.code {
-            KeyCode::Up | KeyCode::Char('k') => self.cursor = self.cursor.saturating_sub(1),
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.cursor = (self.cursor + 1).min(self.visible.len() - 1)
-            }
+        match code {
+            KeyCode::Up => self.cursor = self.cursor.saturating_sub(1),
+            KeyCode::Down => self.cursor = (self.cursor + 1).min(self.visible.len() - 1),
             KeyCode::Enter if self.mode == Mode::Select => return Action::Launch,
             KeyCode::Enter => {
                 if self.selected.is_empty() {
@@ -253,7 +362,7 @@ impl State {
                         Some(format!("Delete {} session(s)? [y/N]", self.selected.len()));
                 }
             }
-            KeyCode::Tab | KeyCode::Char(' ') if self.mode == Mode::Delete => {
+            KeyCode::Tab if self.mode == Mode::Delete => {
                 let key = self.current().unwrap().key();
                 if !self.selected.remove(&key) {
                     self.selected.insert(key.clone());
@@ -474,18 +583,7 @@ pub fn render(frame: &mut Frame, state: &mut State, palette: &Palette) {
                 1,
             ),
         );
-        let mode_hint = if state.mode == Mode::Select {
-            "D: Delete mode"
-        } else {
-            "D: Select mode"
-        };
-        frame.render_widget(
-            Paragraph::new(format!(
-                "  F: CWD/All  |  1-4: Filter  |  {mode_hint}  |  ESC/Q: Quit"
-            ))
-            .style(palette.accent(state.mode)),
-            status,
-        );
+        draw_status(frame, state, palette, status);
         return;
     }
     state.fit_cursor(session_row_count(area));
@@ -513,20 +611,45 @@ pub fn render(frame: &mut Frame, state: &mut State, palette: &Palette) {
         );
         draw_detail(frame, state.current().unwrap(), right);
     }
-    let hints = if state.mode == Mode::Select {
-        SELECT_HINTS
+    draw_status(frame, state, palette, status);
+}
+
+fn draw_status(frame: &mut Frame, state: &State, palette: &Palette, area: Rect) {
+    let text = if let Some(message) = &state.message {
+        format!(" {message}")
+    } else if state.search_active {
+        let actions = if state.mode == Mode::Select {
+            "Enter: Resume session"
+        } else {
+            "Tab: Toggle select  |  Shift+Tab: Select range  |  Enter: Delete selected"
+        };
+        format!(
+            "{SEARCH_PREFIX}{}  |  Ctrl+F: Clear  |  ↑/↓ Navigate  |  {actions}  |  ESC: Quit",
+            state.search_query
+        )
+    } else if state.visible.is_empty() {
+        let mode_hint = if state.mode == Mode::Select {
+            "D: Delete mode"
+        } else {
+            "D: Select mode"
+        };
+        format!(" Ctrl+F: Search  |  F: CWD/All  |  1-4: Filter  |  {mode_hint}  |  ESC/Q: Quit")
+    } else if state.mode == Mode::Select {
+        SELECT_HINTS.into()
     } else {
-        DELETE_HINTS
+        DELETE_HINTS.into()
     };
-    let text = state
-        .message
-        .as_ref()
-        .map(|text| format!(" {text}"))
-        .unwrap_or_else(|| hints.into());
-    frame.render_widget(
-        Paragraph::new(text).style(palette.accent(state.mode).add_modifier(Modifier::BOLD)),
-        status,
-    );
+    let mut paragraph =
+        Paragraph::new(text).style(palette.accent(state.mode).add_modifier(Modifier::BOLD));
+    if state.search_active && state.message.is_none() {
+        // keep the end of long and wide-character queries visible while typing
+        let cursor = SEARCH_PREFIX.len() + Line::from(state.search_query.as_str()).width();
+        let offset = cursor.saturating_sub(usize::from(area.width.saturating_sub(1)));
+        paragraph = paragraph.scroll((0, u16::try_from(offset).unwrap_or(u16::MAX)));
+        let column = (cursor - offset) as u16;
+        frame.set_cursor_position((area.x + column, area.y));
+    }
+    frame.render_widget(paragraph, area);
 }
 
 fn draw_sessions(frame: &mut Frame, state: &State, palette: &Palette, area: Rect) {

@@ -143,7 +143,7 @@ fn browser_navigation_resize_and_delete_cancellation_restore_the_terminal() {
     history(root.path(), root.path());
     let mut browser = Browser::start(root.path(), &[], Some(root.path()));
     browser.wait_for("MODE: SELECT");
-    browser.input("d \r");
+    browser.input("d\t\r");
     browser.wait_for("Delete 1 session(s)?");
     browser.input("\x1b");
     browser
@@ -155,7 +155,7 @@ fn browser_navigation_resize_and_delete_cancellation_restore_the_terminal() {
             pixel_height: 0,
         })
         .unwrap();
-    browser.input("jkdq");
+    browser.input("\x1b[B\x1b[Adq");
     browser.finish(0, true);
     assert!(
         fs::read_to_string(paths(root.path()).claude.join("history.jsonl"))
@@ -271,6 +271,48 @@ fn failed_tui_launch_restores_the_terminal() {
     browser.input("\r");
     browser.finish(1, true);
     assert!(browser.text.contains("Error: claude:"));
+}
+
+#[test]
+fn search_clears_filters_and_arrows_and_enter_launch_the_matching_session() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = paths(root.path());
+    write_jsonl(
+        &paths.claude.join("history.jsonl"),
+        &[
+            json!({"sessionId":"first","timestamp":3000,"project":root.path(),"display":"hi"}),
+            json!({"sessionId":"second","timestamp":2000,"project":root.path(),"display":"hi"}),
+            json!({"sessionId":"third","timestamp":1000,"project":root.path(),"display":"hi"}),
+        ],
+    );
+    for (id, title) in [
+        ("first", "ordinary"),
+        ("second", "qdfa123 one"),
+        ("third", "qdfa123 two"),
+    ] {
+        write_jsonl(
+            &paths.claude.join(format!("projects/project/{id}.jsonl")),
+            &[json!({"type":"custom-title","customTitle":title})],
+        );
+    }
+    let bin = root.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    fs::write(
+        bin.join("claude"),
+        "#!/bin/sh\nprintf 'RESUMED:%s\\n' \"$2\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(bin.join("claude"), fs::Permissions::from_mode(0o755)).unwrap();
+    let mut browser = Browser::start(root.path(), &[], Some(&bin));
+    browser.wait_for("MODE: SELECT");
+    browser.input("\x06no-match");
+    browser.wait_for("found.");
+    browser.text.clear();
+    browser.input("\x06");
+    browser.wait_for("MODE: SELECT");
+    browser.input("\x06qdfa123\x1b[B\r");
+    browser.wait_for("RESUMED:third");
+    browser.finish(0, true);
 }
 
 #[test]

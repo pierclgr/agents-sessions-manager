@@ -249,12 +249,18 @@ fn deselected_anchor_is_ignored_by_range_select() {
 }
 
 #[test]
-fn tab_and_space_toggle_and_set_range_anchor() {
+fn tab_toggles_and_sets_range_anchor_while_space_does_nothing() {
     let mut state = state();
     key(&mut state, KeyCode::Char('d'));
     key(&mut state, KeyCode::Tab);
     assert_eq!(state.selected.len(), 1);
+    let anchor = state.range_anchor.clone();
+    key(&mut state, KeyCode::Down);
     key(&mut state, KeyCode::Char(' '));
+    assert_eq!(state.selected.len(), 1);
+    assert_eq!(state.range_anchor, anchor);
+    key(&mut state, KeyCode::Up);
+    key(&mut state, KeyCode::Tab);
     assert!(state.selected.is_empty());
     assert!(state.range_anchor.is_some());
 }
@@ -306,11 +312,15 @@ fn navigation_stays_in_bounds() {
     key(&mut state, KeyCode::Up);
     assert_eq!(state.cursor, 0);
     for _ in 0..10 {
-        key(&mut state, KeyCode::Char('j'));
+        key(&mut state, KeyCode::Down);
     }
     assert_eq!(state.cursor, 3);
-    key(&mut state, KeyCode::Char('k'));
+    key(&mut state, KeyCode::Up);
     assert_eq!(state.cursor, 2);
+    for character in ['j', 'k'] {
+        key(&mut state, KeyCode::Char(character));
+        assert_eq!(state.cursor, 2);
+    }
 }
 
 #[test]
