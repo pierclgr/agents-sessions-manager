@@ -1,8 +1,8 @@
 //! session history, names, and lazy transcript details
 
-use super::AgentProvider;
+use super::{AgentProvider, SessionLoad};
 use crate::{
-    data::{Agent, DataPaths, Session, delete},
+    data::{Agent, DataPaths, RECENT_COMMAND_LIMIT, Session, delete},
     utils::{CommandRunner, children, is_within, visit_jsonl, visit_jsonl_matching},
 };
 use chrono::{TimeZone, Utc};
@@ -22,7 +22,11 @@ const TITLE_MARKERS: [&str; 2] = ["\"custom-title\"", "\"ai-title\""];
 struct HistoryEntry {
     timestamp: i64,
     display: String,
-    project: String,
+}
+
+struct HistoryGroup {
+    session: Session,
+    entries: Vec<HistoryEntry>,
 }
 
 /// reuse a filename inventory while checking each candidate against the filesystem
@@ -99,77 +103,136 @@ fn transcript_in_projects(
         .find(|path| path.is_file() && is_within(path, projects))
 }
 
+fn read_sessions(paths: &DataPaths, load: SessionLoad<'_>) -> Result<Vec<Session>, String> {
+    let history = paths.claude.join("history.jsonl");
+    let file = match File::open(&history) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            return Err(format!(
+                "Error: Cannot read {}. Check permissions.",
+                history.display()
+            ));
+        }
+        Err(error) => return Err(format!("Error: Cannot read {}: {error}", history.display())),
+    };
+    let mut groups: Vec<HistoryGroup> = Vec::new();
+    let mut indexes = HashMap::new();
+    for (number, line) in io::BufReader::new(file).split(b'\n').enumerate() {
+        let line =
+            line.map_err(|error| format!("Error: Cannot read {}: {error}", history.display()))?;
+        if line.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        let value: Value = match serde_json::from_slice(&line) {
+            Ok(value) => value,
+            Err(_) => {
+                eprintln!(
+                    "Warning: Skipping malformed JSON on line {} of {}",
+                    number + 1,
+                    history.display()
+                );
+                continue;
+            }
+        };
+        let (Some(id), Some(timestamp), Some(display), Some(project)) = (
+            value["sessionId"].as_str(),
+            value["timestamp"].as_i64(),
+            value["display"].as_str(),
+            value["project"].as_str(),
+        ) else {
+            continue;
+        };
+        if id.is_empty()
+            || timestamp == 0
+            || display.is_empty()
+            || project.is_empty()
+            || !load.matches_id(id)
+        {
+            continue;
+        }
+        let Some(date) = Utc.timestamp_millis_opt(timestamp).single() else {
+            continue;
+        };
+        let index = *indexes.entry(id.to_owned()).or_insert_with(|| {
+            groups.push(HistoryGroup {
+                session: Session {
+                    agent: Agent::Claude,
+                    session_id: id.into(),
+                    project_path: project.into(),
+                    created_at: date,
+                    last_active_at: date,
+                    latest_command: String::new(),
+                    commands: vec![],
+                    name: None,
+                    todos: vec![],
+                },
+                entries: Vec::new(),
+            });
+            groups.len() - 1
+        });
+        let group = &mut groups[index];
+        if date < group.session.created_at {
+            group.session.created_at = date;
+            group.session.project_path = project.into();
+        }
+        group.session.last_active_at = group.session.last_active_at.max(date);
+        let entry = HistoryEntry {
+            timestamp,
+            display: display.into(),
+        };
+        if load.is_full() {
+            group.entries.push(entry);
+        } else {
+            // retain the last five entries in timestamp order, including stable ties
+            let index = group
+                .entries
+                .partition_point(|entry| entry.timestamp <= timestamp);
+            group.entries.insert(index, entry);
+            if group.entries.len() > RECENT_COMMAND_LIMIT {
+                group.entries.remove(0);
+            }
+        }
+    }
+    let mut sessions = Vec::new();
+    for mut group in groups {
+        group.entries.sort_by_key(|entry| entry.timestamp);
+        group.session.latest_command = group.entries.last().unwrap().display.clone();
+        group.session.commands = group
+            .entries
+            .into_iter()
+            .map(|entry| entry.display)
+            .collect();
+        sessions.push(group.session);
+    }
+    if load.is_full() && !sessions.is_empty() {
+        let indices: Vec<_> = (0..sessions.len()).collect();
+        Claude.load_names(&mut sessions, &indices, paths);
+    }
+    sessions.sort_by_key(|session| std::cmp::Reverse(session.last_active_at));
+    Ok(sessions)
+}
+
 impl AgentProvider for Claude {
     fn load_sessions(&self, paths: &DataPaths) -> Result<Vec<Session>, String> {
-        let history = paths.claude.join("history.jsonl");
-        let file = match File::open(&history) {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(vec![]),
-            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-                return Err(format!(
-                    "Error: Cannot read {}. Check permissions.",
-                    history.display()
-                ));
-            }
-            Err(error) => return Err(format!("Error: Cannot read {}: {error}", history.display())),
-        };
-        let mut groups: Vec<(String, Vec<HistoryEntry>)> = Vec::new();
-        let mut indexes = HashMap::new();
-        for (number, line) in io::BufReader::new(file).split(b'\n').enumerate() {
-            let line =
-                line.map_err(|error| format!("Error: Cannot read {}: {error}", history.display()))?;
-            if line.iter().all(u8::is_ascii_whitespace) {
-                continue;
-            }
-            let value: Value = match serde_json::from_slice(&line) {
-                Ok(value) => value,
-                Err(_) => {
-                    eprintln!(
-                        "Warning: Skipping malformed JSON on line {} of {}",
-                        number + 1,
-                        history.display()
-                    );
-                    continue;
-                }
-            };
-            let (Some(id), Some(timestamp), Some(display), Some(project)) = (
-                value["sessionId"].as_str(),
-                value["timestamp"].as_i64(),
-                value["display"].as_str(),
-                value["project"].as_str(),
-            ) else {
-                continue;
-            };
-            if id.is_empty()
-                || timestamp == 0
-                || display.is_empty()
-                || project.is_empty()
-                || Utc.timestamp_millis_opt(timestamp).single().is_none()
-            {
-                continue;
-            }
-            let index = *indexes.entry(id.to_owned()).or_insert_with(|| {
-                groups.push((id.into(), Vec::new()));
-                groups.len() - 1
-            });
-            groups[index].1.push(HistoryEntry {
-                timestamp,
-                display: display.into(),
-                project: project.into(),
-            });
-        }
-        if groups.is_empty() {
-            return Ok(vec![]);
-        }
+        read_sessions(paths, SessionLoad::Full)
+    }
+
+    fn load_summaries(
+        &self,
+        paths: &DataPaths,
+        id_prefix: Option<&str>,
+    ) -> Result<Vec<Session>, String> {
+        read_sessions(paths, SessionLoad::Recent(id_prefix))
+    }
+
+    fn load_names(&self, sessions: &mut [Session], indices: &[usize], paths: &DataPaths) {
         let transcripts = TranscriptIndex::new(&paths.claude);
-        let mut sessions = Vec::new();
-        for (id, mut entries) in groups {
-            entries.sort_by_key(|entry| entry.timestamp);
-            let first = &entries[0];
-            let last = entries.last().unwrap();
+        for &index in indices {
+            let session = &mut sessions[index];
             let mut custom = None;
             let mut generated = None;
-            if let Some(path) = transcripts.find(&id) {
+            if let Some(path) = transcripts.find(&session.session_id) {
                 // avoid decoding full conversation messages when only the name is needed
                 let _ = visit_jsonl_matching(&path, &TITLE_MARKERS, |entry| {
                     match entry["type"].as_str() {
@@ -189,20 +252,8 @@ impl AgentProvider for Claude {
                     }
                 });
             }
-            sessions.push(Session {
-                agent: Agent::Claude,
-                session_id: id,
-                project_path: first.project.clone().into(),
-                created_at: Utc.timestamp_millis_opt(first.timestamp).unwrap(),
-                last_active_at: Utc.timestamp_millis_opt(last.timestamp).unwrap(),
-                latest_command: last.display.clone(),
-                commands: entries.into_iter().map(|entry| entry.display).collect(),
-                name: custom.or(generated),
-                todos: vec![],
-            });
+            session.name = custom.or(generated);
         }
-        sessions.sort_by_key(|session| std::cmp::Reverse(session.last_active_at));
-        Ok(sessions)
     }
 
     fn load_detail(&self, session: &mut Session, paths: &DataPaths) {

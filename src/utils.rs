@@ -160,6 +160,18 @@ pub(crate) fn visit_jsonl_matching(
     markers: &[&str],
     mut visit: impl FnMut(Value),
 ) -> io::Result<()> {
+    visit_jsonl_while(path, markers, |entry| {
+        visit(entry);
+        true
+    })
+}
+
+/// stop reading as soon as the visitor returns false
+pub(crate) fn visit_jsonl_while(
+    path: &Path,
+    markers: &[&str],
+    mut visit: impl FnMut(Value) -> bool,
+) -> io::Result<()> {
     let file = fs::File::open(path)?;
     for line in io::BufReader::new(file).split(b'\n') {
         let line = line?;
@@ -170,8 +182,8 @@ pub(crate) fn visit_jsonl_matching(
         let Ok(value) = serde_json::from_str::<Value>(&text) else {
             continue;
         };
-        if value.is_object() {
-            visit(value);
+        if value.is_object() && !visit(value) {
+            break;
         }
     }
     Ok(())

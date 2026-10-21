@@ -31,7 +31,7 @@ Works on **macOS** and **Linux**. SQLite is bundled into the executable.
 - **Session names** -- Shows the name of a session, either the one you set (e.g. `/rename`) or the one the agent generated; sessions without a name show their ID
 - **CLI subcommands** -- Non-interactive `ls`, `launch`, and `delete` commands for scripting and quick access
 - **Cross-project view** -- Aggregates sessions from every project into a single list, sorted by most recent activity
-- **Lazy detail loading** -- Per-session data (todos, commands) is loaded only when highlighted, keeping startup fast
+- **Bounded startup loading** -- Keeps five recent prompts per session, loads Claude names for visible rows, and loads todos when highlighted
 - **Graceful degradation** -- Hides the right pane on narrow terminals, hides the banner on short terminals, falls back to 256-color when true-color is unavailable
 
 ## Prerequisites
@@ -225,13 +225,20 @@ directory, using Unix `exec`. The terminal is restored before the agent starts.
 When a session is highlighted in the TUI, Claude's per-session JSONL file is
 parsed to extract todos.
 
-Claude session loading builds a transcript filename index once per load,
+Claude name loading builds a transcript filename index once per batch,
 instead of searching every project for each session. Duplicate IDs still use
 the first matching project in sorted path order. Project-directory symlinks
 are skipped, and transcript targets must stay within `projects/`. The original
 lookup handles unreadable directory listings, non-ASCII filenames and unusual
 IDs, keeping filesystem name matching unchanged. Detail loading keeps its
 direct lookup; a deletion batch shares one transcript index.
+
+The CLI and TUI load session summaries with at most five recent prompts each.
+Launch and delete lookups restrict loading to the literal ID prefix and keep
+the same activity order and tie rules. Listing loads all names before printing;
+delete confirmation loads the chosen session's name. The browser loads Claude
+names only for rows about to be shown, before drawing them. Library callers
+can still request complete prompt histories with the existing loading API.
 
 **Claude Code session deletion** removes:
 

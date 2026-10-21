@@ -214,3 +214,32 @@ fn prefix_lookup_keeps_the_first_match_in_activity_order() {
         .unwrap();
     assert!(String::from_utf8_lossy(&output.stdout).contains("Session ID:  prefix-new"));
 }
+
+#[test]
+fn listing_and_delete_confirmation_keep_names_and_latest_prompts() {
+    let root = tempfile::tempdir().unwrap();
+    let data = paths(root.path());
+    write_jsonl(
+        &data.claude.join("history.jsonl"),
+        &[
+            json!({"sessionId":"target","project":"/p","display":"latest prompt","timestamp":2000}),
+            json!({"sessionId":"target","project":"/p","display":"older prompt","timestamp":1000}),
+            json!({"sessionId":"other","project":"/elsewhere","display":"other","timestamp":3000}),
+        ],
+    );
+    write_jsonl(
+        &data.claude.join("projects/project/target.jsonl"),
+        &[json!({"type":"custom-title","customTitle":"Saved session title"})],
+    );
+    for args in [vec!["ls"], vec!["delete", "tar"]] {
+        let output = command(root.path())
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(text.contains("Saved session title"), "{text}");
+        assert!(text.contains("latest prompt"), "{text}");
+    }
+}

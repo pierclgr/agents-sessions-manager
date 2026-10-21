@@ -3,7 +3,7 @@
 use crate::{
     data::{
         DataPaths, Session,
-        agents::{load_all_sessions, provider},
+        agents::{load_session_names, load_session_summaries, provider},
     },
     tui,
     utils::{ProcessRunner, SHORT_ID_LENGTH, format_datetime, truncate},
@@ -65,24 +65,30 @@ pub fn run() -> Result<(), String> {
         ));
     }
     let paths = DataPaths::from_env()?;
-    let sessions = load_all_sessions(&paths)?;
     match command.as_str() {
         "" => {
+            let sessions = load_session_summaries(&paths, None)?;
             if let Some(session) = tui::run(&paths, sessions)? {
                 resume(&session, &paths)?;
             }
         }
-        "ls" => list(&sessions),
+        "ls" => {
+            let mut sessions = load_session_summaries(&paths, None)?;
+            let indices: Vec<_> = (0..sessions.len()).collect();
+            load_session_names(&mut sessions, &indices, &paths);
+            list(&sessions);
+        }
         _ => {
             let id = args[1].to_string_lossy();
-            let session = sessions
-                .iter()
-                .find(|session| session.session_id.starts_with(id.as_ref()))
-                .ok_or_else(|| format!("Error: Session '{id}' not found."))?;
+            let mut sessions = load_session_summaries(&paths, Some(id.as_ref()))?;
+            if sessions.is_empty() {
+                return Err(format!("Error: Session '{id}' not found."));
+            }
             if command == "launch" {
-                resume(session, &paths)?;
+                resume(&sessions[0], &paths)?;
             } else {
-                delete(session, &paths)?;
+                load_session_names(&mut sessions, &[0], &paths);
+                delete(&sessions[0], &paths)?;
             }
         }
     }

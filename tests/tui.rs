@@ -6,7 +6,7 @@ use agents_sessions::{
 };
 use common::session;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::{Terminal, backend::TestBackend, style::Color};
+use ratatui::{Terminal, backend::TestBackend, layout::Rect, style::Color};
 use std::collections::HashSet;
 
 fn state() -> State {
@@ -109,6 +109,43 @@ fn directory_filter_refreshes_alias_matches_between_operations() {
         key(&mut state, KeyCode::Char('f'));
         assert_eq!(state.visible.len(), if target == &project { 2 } else { 0 });
     }
+}
+
+#[test]
+fn frame_preparation_loads_names_only_for_the_current_viewport() {
+    use serde_json::json;
+    let root = tempfile::tempdir().unwrap();
+    let paths = common::paths(root.path());
+    let sessions = (0..10)
+        .map(|index| {
+            let id = format!("c{index}");
+            common::write_jsonl(
+                &paths.claude.join(format!("projects/project/{id}.jsonl")),
+                &[json!({"type":"custom-title","customTitle":format!("name-{index}")})],
+            );
+            session(Agent::Claude, &id)
+        })
+        .collect();
+    let mut state = State::new(sessions, "/p/proj".into());
+    let area = Rect::new(0, 0, 100, 8);
+    state.prepare_frame(&paths, area);
+    for (index, session) in state.all_sessions.iter().enumerate() {
+        assert_eq!(session.name.is_some(), index < 5);
+    }
+    common::write_jsonl(
+        &paths.claude.join("projects/project/c9.jsonl"),
+        &[json!({"type":"custom-title","customTitle":"renamed-9"})],
+    );
+    state.cursor = 9;
+    state.prepare_frame(&paths, area);
+    assert_eq!(state.scroll_offset, 5);
+    assert_eq!(state.current().unwrap().name.as_deref(), Some("renamed-9"));
+    assert!(
+        state
+            .all_sessions
+            .iter()
+            .all(|session| session.name.is_some())
+    );
 }
 
 #[test]

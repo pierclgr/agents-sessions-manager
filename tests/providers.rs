@@ -544,3 +544,168 @@ fn sqlite_access_is_readonly_and_never_creates_a_missing_database() {
             .is_err()
     );
 }
+
+fn summary_fixture(root: &std::path::Path) -> agents_sessions::data::DataPaths {
+    let paths = paths(root);
+    let order = [7, 2, 0, 5, 4, 3, 1, 6];
+    let history: Vec<_> = order
+        .iter()
+        .map(|number| {
+            json!({
+                "sessionId":"c", "timestamp":(number + 1) * 1000,
+                "display":format!("prompt-{number}"),
+                "project":if *number == 0 { "/first" } else { "/later" }
+            })
+        })
+        .collect();
+    write_jsonl(&paths.claude.join("history.jsonl"), &history);
+    write_jsonl(
+        &paths.claude.join("projects/project/c.jsonl"),
+        &[
+            json!({"type":"custom-title","customTitle":"Claude title"}),
+            json!({"todos":["lazy todo"]}),
+        ],
+    );
+    codex_db(&paths.codex.join("state_1.sqlite"));
+    let codex = Connection::open(paths.codex.join("state_1.sqlite")).unwrap();
+    codex
+        .execute_batch(
+            "INSERT INTO threads VALUES
+        ('literal%id','/p',NULL,'percent',1000,9000,0,'user'),
+        ('literal_other','/p',NULL,'underscore',1000,9000,0,'user');",
+        )
+        .unwrap();
+    let codex_history: Vec<_> = (0..8)
+        .map(|number| {
+            json!({
+                "session_id":"named","text":format!("prompt-{number}")
+            })
+        })
+        .collect();
+    write_jsonl(&paths.codex.join("history.jsonl"), &codex_history);
+    fs::create_dir_all(paths.opencode_db.parent().unwrap()).unwrap();
+    let opencode = Connection::open(&paths.opencode_db).unwrap();
+    opencode
+        .execute_batch(
+            "CREATE TABLE session_v2 (id TEXT, directory TEXT, title TEXT,
+        time_created INTEGER,time_updated INTEGER,parent_id TEXT,time_archived INTEGER);
+        CREATE TABLE session_message (session_id TEXT,data TEXT,type TEXT,seq INTEGER);
+        INSERT INTO session_v2 VALUES ('o','/p','OpenCode title',1000,9000,NULL,NULL);",
+        )
+        .unwrap();
+    for number in order {
+        opencode
+            .execute(
+                "INSERT INTO session_message VALUES ('o',?1,'user',?2)",
+                rusqlite::params![
+                    json!({"text":format!("prompt-{number}")}).to_string(),
+                    number
+                ],
+            )
+            .unwrap();
+    }
+    let mut pi =
+        vec![json!({"type":"session","id":"pi","cwd":"/p", "timestamp":"1970-01-01T00:00:01Z"})];
+    for number in 0..8 {
+        pi.push(
+            json!({"type":"message","timestamp":format!("1970-01-01T00:00:{:02}Z",number+2),
+            "message":{"role":"user","content":format!("prompt-{number}")}}),
+        );
+    }
+    pi.push(json!({"type":"session_info","name":"Pi title"}));
+    write_jsonl(&paths.pi_sessions.join("project/date_pi.jsonl"), &pi);
+    paths
+}
+
+#[test]
+fn summaries_keep_metadata_order_and_only_five_recent_prompts() {
+    use agents_sessions::data::agents::{load_session_names, load_session_summaries};
+    let root = tempfile::tempdir().unwrap();
+    let paths = summary_fixture(root.path());
+    let full = load_all_sessions(&paths).unwrap();
+    let mut recent = load_session_summaries(&paths, None).unwrap();
+    assert_eq!(
+        recent.iter().map(|s| s.key()).collect::<Vec<_>>(),
+        full.iter().map(|s| s.key()).collect::<Vec<_>>()
+    );
+    for id in ["c", "named", "o", "pi"] {
+        let complete = full.iter().find(|s| s.session_id == id).unwrap();
+        let summary = recent.iter().find(|s| s.session_id == id).unwrap();
+        assert_eq!(
+            complete.commands,
+            (0..8).map(|n| format!("prompt-{n}")).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            summary.commands,
+            (3..8).map(|n| format!("prompt-{n}")).collect::<Vec<_>>()
+        );
+        assert_eq!(summary.latest_command, "prompt-7");
+        assert_eq!(summary.created_at, complete.created_at);
+        assert_eq!(summary.last_active_at, complete.last_active_at);
+        assert_eq!(summary.project_path, complete.project_path);
+        assert!(summary.todos.is_empty());
+    }
+    let claude = recent.iter().find(|s| s.agent == Agent::Claude).unwrap();
+    assert_eq!(claude.project_path, std::path::Path::new("/first"));
+    assert!(claude.name.is_none());
+    let indices: Vec<_> = (0..recent.len()).collect();
+    load_session_names(&mut recent, &indices, &paths);
+    for (summary, complete) in recent.iter().zip(&full) {
+        assert_eq!(summary.name, complete.name);
+    }
+    let claude = recent
+        .iter_mut()
+        .find(|s| s.agent == Agent::Claude)
+        .unwrap();
+    provider(Agent::Claude).load_detail(claude, &paths);
+    assert_eq!(claude.todos, ["lazy todo"]);
+}
+
+#[test]
+fn summary_prefixes_are_literal_and_keep_global_activity_order() {
+    use agents_sessions::data::agents::load_session_summaries;
+    let root = tempfile::tempdir().unwrap();
+    let paths = summary_fixture(root.path());
+    let full = load_all_sessions(&paths).unwrap();
+    for prefix in [
+        "", "c", "named", "NAMED", "literal%", "literal_", "o", "pi", "missing",
+    ] {
+        let selected = load_session_summaries(&paths, Some(prefix)).unwrap();
+        let expected: Vec<_> = full
+            .iter()
+            .filter(|s| s.session_id.starts_with(prefix))
+            .map(|s| s.key())
+            .collect();
+        assert_eq!(
+            selected.iter().map(|s| s.key()).collect::<Vec<_>>(),
+            expected,
+            "prefix {prefix:?}"
+        );
+    }
+}
+
+#[test]
+fn claude_summary_keeps_input_order_for_equal_timestamps() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = paths(root.path());
+    let history: Vec<_> = (0..7)
+        .map(|number| {
+            json!({
+                "sessionId":"id", "timestamp":1000,
+                "display":format!("prompt-{number}"), "project":format!("/project-{number}")
+            })
+        })
+        .collect();
+    write_jsonl(&paths.claude.join("history.jsonl"), &history);
+    let sessions = provider(Agent::Claude)
+        .load_summaries(&paths, None)
+        .unwrap();
+    assert_eq!(sessions[0].project_path, std::path::Path::new("/project-0"));
+    assert_eq!(sessions[0].latest_command, "prompt-6");
+    assert_eq!(
+        sessions[0].commands,
+        (2..7)
+            .map(|number| format!("prompt-{number}"))
+            .collect::<Vec<_>>()
+    );
+}

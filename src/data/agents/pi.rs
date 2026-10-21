@@ -1,9 +1,9 @@
 //! one session per transcript file
 
-use super::AgentProvider;
+use super::{AgentProvider, SessionLoad};
 use crate::{
     data::{Agent, DataPaths, Session},
-    utils::{CommandRunner, is_within, parse_timestamp, project_files, visit_jsonl},
+    utils::{CommandRunner, is_within, parse_timestamp, project_files, visit_jsonl_while},
 };
 use serde_json::Value;
 use std::{
@@ -27,17 +27,18 @@ fn session_file(id: &str, root: &Path, files: &[PathBuf]) -> Option<PathBuf> {
         .cloned()
 }
 
-fn parse_file(path: &Path) -> Option<Session> {
+fn parse_file(path: &Path, load: SessionLoad<'_>) -> Option<Session> {
     let mut header: Option<Value> = None;
     let mut commands = Vec::new();
     let mut name = None;
     let mut last_timestamp = None;
     let mut invalid_header = false;
-    visit_jsonl(path, |entry| {
+    visit_jsonl_while(path, &[], |entry| {
         if header.is_none() {
             invalid_header = entry["type"] != "session";
+            let matches = entry["id"].as_str().is_some_and(|id| load.matches_id(id));
             header = Some(entry);
-            return;
+            return !invalid_header && matches;
         }
         if let Some(timestamp) = entry["timestamp"].as_str() {
             last_timestamp = Some(timestamp.to_owned());
@@ -61,9 +62,10 @@ fn parse_file(path: &Path) -> Option<Session> {
                 _ => String::new(),
             };
             if !text.is_empty() {
-                commands.push(text);
+                load.push_command(&mut commands, text);
             }
         }
+        true
     })
     .ok()?;
     if invalid_header || commands.is_empty() {
@@ -88,12 +90,24 @@ fn parse_file(path: &Path) -> Option<Session> {
     })
 }
 
+fn read_sessions(paths: &DataPaths, load: SessionLoad<'_>) -> Result<Vec<Session>, String> {
+    Ok(project_files(&paths.pi_sessions, "jsonl")
+        .iter()
+        .filter_map(|path| parse_file(path, load))
+        .collect())
+}
+
 impl AgentProvider for Pi {
     fn load_sessions(&self, paths: &DataPaths) -> Result<Vec<Session>, String> {
-        Ok(project_files(&paths.pi_sessions, "jsonl")
-            .iter()
-            .filter_map(|path| parse_file(path))
-            .collect())
+        read_sessions(paths, SessionLoad::Full)
+    }
+
+    fn load_summaries(
+        &self,
+        paths: &DataPaths,
+        id_prefix: Option<&str>,
+    ) -> Result<Vec<Session>, String> {
+        read_sessions(paths, SessionLoad::Recent(id_prefix))
     }
 
     fn delete_sessions(

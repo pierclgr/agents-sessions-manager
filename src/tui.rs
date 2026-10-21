@@ -2,8 +2,8 @@
 
 use crate::{
     data::{
-        Agent, DataPaths, Session, SessionKey,
-        agents::{load_all_sessions, provider},
+        Agent, DataPaths, RECENT_COMMAND_LIMIT, Session, SessionKey,
+        agents::{load_session_names, load_session_summaries, provider},
     },
     utils::{CommandRunner, ProcessRunner, SHORT_ID_LENGTH, format_datetime, truncate},
 };
@@ -33,11 +33,12 @@ const BANNER: [&str; 4] = [
     r"/_/ \_\___|___|_|\_| |_| |___/ |___/___|___/___/___\___/|_|\_|___/ |_|  |_/_/ \_\_|\_/_/ \_\___|___|_|_\",
 ];
 const BANNER_HEIGHT: u16 = 5;
+const BANNER_MIN_CONTENT_HEIGHT: u16 = 5;
+const NON_SESSION_ROWS: u16 = 3;
 const MIN_WIDTH: u16 = 20;
 const MIN_HEIGHT: u16 = 4;
 const RIGHT_PANE_MIN_WIDTH: u16 = 60;
 const NAME_MAX: usize = 24;
-const RECENT_COMMAND_LIMIT: usize = 5;
 const LEFT_PANE_PERCENT: u32 = 60;
 const TRUE_COLOR_COUNT: u32 = 1 << 24;
 const INDEXED_COLOR_COUNT: u32 = 256;
@@ -83,6 +84,7 @@ pub struct State {
     pub confirming: bool,
     cwd: PathBuf,
     enriched_key: Option<SessionKey>,
+    named: HashSet<SessionKey>,
 }
 
 impl State {
@@ -102,6 +104,7 @@ impl State {
             confirming: false,
             cwd,
             enriched_key: None,
+            named: HashSet::new(),
         };
         state.apply_filter();
         state
@@ -111,6 +114,35 @@ impl State {
         self.visible
             .get(self.cursor)
             .map(|index| &self.all_sessions[*index])
+    }
+
+    /// load transcript names only for rows that the next frame will display
+    pub fn prepare_frame(&mut self, paths: &DataPaths, area: Rect) {
+        let rows = session_row_count(area);
+        if rows == 0 || self.visible.is_empty() {
+            return;
+        }
+        self.fit_cursor(rows);
+        let indices: Vec<_> = self
+            .visible
+            .iter()
+            .skip(self.scroll_offset)
+            .take(rows)
+            .copied()
+            .filter(|index| !self.named.contains(&self.all_sessions[*index].key()))
+            .collect();
+        load_session_names(&mut self.all_sessions, &indices, paths);
+        for index in indices {
+            self.named.insert(self.all_sessions[index].key());
+        }
+    }
+
+    fn fit_cursor(&mut self, rows: usize) {
+        if self.cursor < self.scroll_offset {
+            self.scroll_offset = self.cursor;
+        } else if self.cursor >= self.scroll_offset + rows {
+            self.scroll_offset = (self.cursor + 1).saturating_sub(rows);
+        }
     }
 
     fn apply_filter(&mut self) {
@@ -285,13 +317,14 @@ impl State {
                 errors.extend(provider(agent).delete_sessions(&sessions, paths, runner));
             }
         }
-        self.all_sessions = load_all_sessions(paths)?;
+        self.all_sessions = load_session_summaries(paths, None)?;
         let remaining: HashSet<_> = self.all_sessions.iter().map(Session::key).collect();
         let deleted = keys.iter().filter(|key| !remaining.contains(key)).count();
         self.selected.clear();
         self.range_anchor = None;
         self.mode = Mode::Select;
         self.enriched_key = None;
+        self.named.clear();
         self.apply_filter();
         self.message = Some(format!(
             "Deleted {deleted} session(s).{}",
@@ -359,6 +392,22 @@ impl Palette {
     }
 }
 
+fn banner_height(height: u16) -> u16 {
+    if height > BANNER_HEIGHT + BANNER_MIN_CONTENT_HEIGHT {
+        BANNER_HEIGHT
+    } else {
+        0
+    }
+}
+
+fn session_row_count(area: Rect) -> usize {
+    if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
+        return 0;
+    }
+    area.height
+        .saturating_sub(banner_height(area.height) + NON_SESSION_ROWS) as usize
+}
+
 pub fn render(frame: &mut Frame, state: &mut State, palette: &Palette) {
     let area = frame.area();
     if area.is_empty() {
@@ -368,11 +417,7 @@ pub fn render(frame: &mut Frame, state: &mut State, palette: &Palette) {
         frame.render_widget(Paragraph::new("Terminal too small"), area);
         return;
     }
-    let banner_height = if area.height > BANNER_HEIGHT + 5 {
-        BANNER_HEIGHT
-    } else {
-        0
-    };
+    let banner_height = banner_height(area.height);
     if banner_height > 0 {
         for (row, line) in BANNER.iter().enumerate() {
             frame.render_widget(
@@ -443,12 +488,7 @@ pub fn render(frame: &mut Frame, state: &mut State, palette: &Palette) {
         );
         return;
     }
-    let data_height = content.height.saturating_sub(1) as usize;
-    if state.cursor < state.scroll_offset {
-        state.scroll_offset = state.cursor;
-    } else if state.cursor >= state.scroll_offset + data_height {
-        state.scroll_offset = (state.cursor + 1).saturating_sub(data_height);
-    }
+    state.fit_cursor(session_row_count(area));
     let show_right = area.width >= RIGHT_PANE_MIN_WIDTH;
     let left_width = if show_right {
         (u32::from(area.width) * LEFT_PANE_PERCENT / 100) as u16
@@ -679,7 +719,13 @@ pub fn run(paths: &DataPaths, sessions: Vec<Session>) -> Result<Option<Session>,
                 return Ok(None);
             }
             if redraw {
-                if let Some(index) = state.visible.get(state.cursor).copied() {
+                let size = terminal.size()?;
+                let area = Rect::new(0, 0, size.width, size.height);
+                state.prepare_frame(paths, area);
+                if area.width >= RIGHT_PANE_MIN_WIDTH
+                    && area.height >= MIN_HEIGHT
+                    && let Some(index) = state.visible.get(state.cursor).copied()
+                {
                     let session = &mut state.all_sessions[index];
                     if state.enriched_key.as_ref() != Some(&session.key()) {
                         provider(session.agent).load_detail(session, paths);

@@ -37,6 +37,7 @@ impl Agent {
 }
 
 pub type SessionKey = (Agent, String);
+pub(crate) const RECENT_COMMAND_LIMIT: usize = 5;
 
 #[derive(Clone, Debug)]
 pub struct Session {
