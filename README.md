@@ -249,6 +249,15 @@ needed and checked against files that remain after each deletion. Deletions
 keep their input order, path checks and error handling; a failed deletion or
 an unreadable remaining transcript still protects its shared plan.
 
+Claude and Codex history cleanup uses a reusable line buffer and streams kept
+bytes to a temporary file. The temporary file is created only after a match;
+the retained prefix is copied from the original file without loading it into
+memory. Unmatched files stay untouched. The replacement keeps the original
+permissions and happens only after all reads, writes and file synchronization
+succeed. Removed JSON records remain available for cleanup of shared data.
+Claude's paste-cache check also reads the remaining history line by line,
+retaining a pasted file whenever its hash occurs anywhere in that text.
+
 ## Running Tests
 
 The tests build fake agent data in temporary directories. Agent commands are

@@ -118,6 +118,36 @@ fn claude_deletes_artifacts_and_unused_pastes_but_keeps_shared_data() {
 }
 
 #[test]
+fn claude_paste_cleanup_keeps_hashes_in_long_malformed_history_lines() {
+    const PREFIX_BYTES: usize = 32 * 1024 - 3;
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = fixture(tmp.path());
+    let removed = json!({
+        "sessionId":A,
+        "pastedContents":{
+            "one":{"contentHash":"only-a"},
+            "two":{"contentHash":"shared"}
+        }
+    });
+    let mut kept = vec![b'x'; PREFIX_BYTES];
+    kept.extend_from_slice(b"shared\xff\r\n");
+    let original = [format!("{removed}\n").as_bytes(), kept.as_slice()].concat();
+    fs::write(paths.claude.join("history.jsonl"), original).unwrap();
+    let errors = provider(Agent::Claude).delete_sessions(
+        &[&session(Agent::Claude, A)],
+        &paths,
+        &Runner {
+            fail: false,
+            calls: RefCell::new(vec![]),
+        },
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(!paths.claude.join("paste-cache/only-a.txt").exists());
+    assert!(paths.claude.join("paste-cache/shared.txt").is_file());
+    assert_eq!(fs::read(paths.claude.join("history.jsonl")).unwrap(), kept);
+}
+
+#[test]
 fn claude_removes_last_shared_plan_and_keeps_project_memory() {
     let tmp = tempfile::tempdir().unwrap();
     let paths = fixture(tmp.path());

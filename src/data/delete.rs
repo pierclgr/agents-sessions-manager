@@ -7,7 +7,8 @@ use crate::utils::{
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    fs, io,
+    fs,
+    io::{self, BufRead},
     path::{Path, PathBuf},
 };
 
@@ -256,19 +257,30 @@ fn delete_unused_pastes(removed: &[Value], history: &Path, root: &Path, errors: 
     if hashes.is_empty() {
         return;
     }
-    let bytes = match fs::read(history) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
-        Err(_) => return,
-    };
-    let remaining = String::from_utf8_lossy(&bytes);
-    for hash in hashes {
-        if !remaining.contains(&hash) {
-            remove_artifact(
-                &root.join("paste-cache").join(format!("{hash}.txt")),
-                root,
-                errors,
-            );
+    match fs::File::open(history) {
+        Ok(file) => {
+            let mut reader = io::BufReader::new(file);
+            let mut line = Vec::new();
+            loop {
+                line.clear();
+                match reader.read_until(b'\n', &mut line) {
+                    Ok(0) => break,
+                    Ok(_) => {}
+                    Err(_) => return,
+                }
+                // safe hashes contain no newlines, so substring matches stay within a line
+                let text = String::from_utf8_lossy(&line);
+                hashes.retain(|hash| !text.contains(hash.as_str()));
+            }
         }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(_) => return,
+    }
+    for hash in hashes {
+        remove_artifact(
+            &root.join("paste-cache").join(format!("{hash}.txt")),
+            root,
+            errors,
+        );
     }
 }

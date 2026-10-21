@@ -7,7 +7,7 @@ use std::{
     collections::HashSet,
     ffi::OsString,
     fs,
-    io::{self, BufRead, Write},
+    io::{self, BufRead, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -46,20 +46,31 @@ pub fn open_readonly(path: &Path) -> rusqlite::Result<Connection> {
 }
 
 /// keep every unmatched line byte-for-byte and replace the file only on success
+/// stream kept bytes while retaining removed records for shared-data cleanup
 pub fn remove_jsonl_lines(
     path: &Path,
     id_key: &str,
     ids: &HashSet<String>,
 ) -> io::Result<Vec<Value>> {
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(vec![]),
         Err(error) => return Err(error),
     };
-    let mut kept = Vec::new();
+    let mut reader = io::BufReader::new(file);
+    let mut temporary: Option<io::BufWriter<tempfile::NamedTempFile>> = None;
+    let mut line = Vec::new();
+    let mut position = 0;
     let mut removed = Vec::new();
-    for line in bytes.split_inclusive(|byte| *byte == b'\n') {
-        let entry = serde_json::from_slice::<Value>(line).ok();
+    loop {
+        line.clear();
+        let count = reader.read_until(b'\n', &mut line)?;
+        if count == 0 {
+            break;
+        }
+        let line_start = position;
+        position += count as u64;
+        let entry = serde_json::from_slice::<Value>(&line).ok();
         let matches = entry
             .as_ref()
             .and_then(|value| value.get(id_key))
@@ -67,18 +78,36 @@ pub fn remove_jsonl_lines(
             .is_some_and(|id| ids.contains(id));
         if matches {
             removed.push(entry.unwrap());
-        } else {
-            kept.extend_from_slice(line);
+            if temporary.is_none() {
+                // leave unmatched files alone, including those in readonly directories
+                let file =
+                    tempfile::NamedTempFile::new_in(path.parent().unwrap_or(Path::new(".")))?;
+                file.as_file()
+                    .set_permissions(fs::metadata(path)?.permissions())?;
+                let mut output = io::BufWriter::new(file);
+                reader.rewind()?;
+                let copied = io::copy(&mut reader.by_ref().take(line_start), &mut output)?;
+                if copied != line_start {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        format!(
+                            "Cannot copy {}: expected {line_start} prefix bytes, read {copied}",
+                            path.display()
+                        ),
+                    ));
+                }
+                reader.seek(SeekFrom::Start(position))?;
+                temporary = Some(output);
+            }
+        } else if let Some(output) = &mut temporary {
+            output.write_all(&line)?;
         }
     }
-    if removed.is_empty() {
+    let Some(output) = temporary else {
         return Ok(removed);
-    }
-    let mut temporary = tempfile::NamedTempFile::new_in(path.parent().unwrap_or(Path::new(".")))?;
-    temporary
-        .as_file()
-        .set_permissions(fs::metadata(path)?.permissions())?;
-    temporary.write_all(&kept)?;
+    };
+    // report buffered write failures before syncing and replacing the original
+    let temporary = output.into_inner().map_err(|error| error.into_error())?;
     temporary.as_file().sync_all()?;
     temporary.persist(path).map_err(|error| error.error)?;
     Ok(removed)
