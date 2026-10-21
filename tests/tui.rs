@@ -83,6 +83,35 @@ fn cwd_scope_matches_symlink_aliases_in_either_path() {
 }
 
 #[test]
+fn directory_filter_refreshes_alias_matches_between_operations() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    let other = root.path().join("other");
+    let alias = root.path().join("alias");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::create_dir(&other).unwrap();
+    let sessions = ["first", "second"]
+        .into_iter()
+        .map(|id| {
+            let mut item = session(Agent::Claude, id);
+            item.project_path = alias.clone();
+            item
+        })
+        .collect();
+    let mut state = State::new(sessions, project.clone());
+    assert!(state.visible.is_empty());
+    for target in [&project, &other, &project] {
+        key(&mut state, KeyCode::Char('f'));
+        if alias.exists() {
+            std::fs::remove_file(&alias).unwrap();
+        }
+        std::os::unix::fs::symlink(target, &alias).unwrap();
+        key(&mut state, KeyCode::Char('f'));
+        assert_eq!(state.visible.len(), if target == &project { 2 } else { 0 });
+    }
+}
+
+#[test]
 fn directory_and_agent_filters_combine_in_both_modes() {
     for mode in [Mode::Select, Mode::Delete] {
         let mut elsewhere = session(Agent::Codex, "other");

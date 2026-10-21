@@ -260,6 +260,9 @@ retaining a pasted file whenever its hash occurs anywhere in that text.
 
 Message previews inspect only enough Unicode characters to fit the display
 limit, keeping the existing ellipsis and character boundaries for long text.
+Directory filtering resolves each distinct project path once per filter
+operation. Each operation starts fresh so changed or newly available symlink
+targets are reflected when the filter is applied again.
 
 ## Running Tests
 

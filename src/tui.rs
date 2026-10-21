@@ -16,7 +16,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     io,
     path::PathBuf,
     sync::{
@@ -116,6 +116,7 @@ impl State {
     fn apply_filter(&mut self) {
         // match symlink aliases without changing paths used for display and launch
         let cwd = self.cwd.canonicalize().unwrap_or_else(|_| self.cwd.clone());
+        let mut directory_matches = HashMap::new();
         self.visible = self
             .all_sessions
             .iter()
@@ -124,10 +125,14 @@ impl State {
             .filter(|(_, session)| {
                 self.directory_scope == DirectoryScope::All
                     || session.project_path == self.cwd
-                    || session
-                        .project_path
-                        .canonicalize()
-                        .is_ok_and(|path| path == cwd)
+                    || *directory_matches
+                        .entry(session.project_path.clone())
+                        .or_insert_with(|| {
+                            session
+                                .project_path
+                                .canonicalize()
+                                .is_ok_and(|path| path == cwd)
+                        })
             })
             .map(|(index, _)| index)
             .collect();
