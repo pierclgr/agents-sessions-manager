@@ -10,7 +10,12 @@ use agents_sessions::{
 use common::{paths, session, write_jsonl};
 use rusqlite::Connection;
 use serde_json::json;
-use std::{cell::RefCell, ffi::OsString, fs};
+use std::{
+    cell::RefCell,
+    ffi::OsString,
+    fs,
+    os::unix::fs::{PermissionsExt, symlink},
+};
 
 #[derive(Default)]
 struct Runner {
@@ -70,6 +75,237 @@ fn claude_groups_sorts_titles_and_loads_todos_lazily() {
     assert!(named.todos.is_empty());
     provider(Agent::Claude).load_detail(named, &paths);
     assert_eq!(named.todos, ["write tests", "check"]);
+}
+
+#[test]
+fn claude_title_lookup_keeps_project_order_and_filesystem_case_matching() {
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = paths(tmp.path());
+    let ids = ["duplicate", "mixed", "upper-extension"];
+    let history: Vec<_> = ids
+        .iter()
+        .map(|id| json!({"sessionId":id,"timestamp":1000,"display":"hi","project":"/p"}))
+        .collect();
+    write_jsonl(&paths.claude.join("history.jsonl"), &history);
+    for project in ["z-last", "a-first"] {
+        for filename in ["duplicate.jsonl", "mixed.jsonl"] {
+            if project == "a-first" && filename == "mixed.jsonl" {
+                continue;
+            }
+            write_jsonl(
+                &paths.claude.join("projects").join(project).join(filename),
+                &[json!({"type":"custom-title","customTitle":project})],
+            );
+        }
+    }
+    let mixed = paths.claude.join("projects/a-first/MiXeD.jsonl");
+    write_jsonl(
+        &mixed,
+        &[json!({"type":"custom-title","customTitle":"case alias"})],
+    );
+    write_jsonl(
+        &paths.claude.join("projects/a-first/upper-extension.JSONL"),
+        &[json!({"type":"custom-title","customTitle":"upper extension"})],
+    );
+    let sessions = provider(Agent::Claude).load_sessions(&paths).unwrap();
+    assert_eq!(sessions.len(), ids.len());
+    assert_eq!(sessions[0].name.as_deref(), Some("a-first"));
+    let expected_mixed = if mixed.with_file_name("mixed.jsonl").is_file() {
+        "case alias"
+    } else {
+        "z-last"
+    };
+    assert_eq!(sessions[1].name.as_deref(), Some(expected_mixed));
+    let expected_extension = paths
+        .claude
+        .join("projects/a-first/upper-extension.jsonl")
+        .is_file()
+        .then_some("upper extension");
+    assert_eq!(sessions[2].name.as_deref(), expected_extension);
+}
+
+#[test]
+fn claude_title_lookup_keeps_missing_and_unusual_ids() {
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = paths(tmp.path());
+    let cases = [
+        ("missing", None),
+        ("../escape", None),
+        ("nested/child", None),
+        (".", None),
+        ("..", None),
+        ("odd/", Some("trailing slash")),
+        ("trailing/.", Some("trailing dot")),
+    ];
+    let history: Vec<_> = cases
+        .iter()
+        .map(|(id, _)| json!({"sessionId":id,"timestamp":1000,"display":"hi","project":"/p"}))
+        .collect();
+    write_jsonl(&paths.claude.join("history.jsonl"), &history);
+    for (filename, title) in [
+        ("escape.jsonl", "rejected parent"),
+        ("project/nested/child.jsonl", "rejected nested path"),
+        ("project/..jsonl", "rejected dot"),
+        ("project/...jsonl", "rejected parent component"),
+        ("project/odd/.jsonl", "trailing slash"),
+        ("project/trailing/..jsonl", "trailing dot"),
+    ] {
+        write_jsonl(
+            &paths.claude.join("projects").join(filename),
+            &[json!({"type":"custom-title","customTitle":title})],
+        );
+    }
+    let sessions = provider(Agent::Claude).load_sessions(&paths).unwrap();
+    assert_eq!(sessions.len(), cases.len());
+    for (session, (id, name)) in sessions.iter().zip(cases) {
+        assert_eq!(session.session_id, id);
+        assert_eq!(session.name.as_deref(), name, "session ID {id:?}");
+    }
+}
+
+#[test]
+fn claude_title_lookup_keeps_unicode_filesystem_aliases() {
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = paths(tmp.path());
+    let cases = [("K", "K"), ("é", "e\u{301}"), ("日本語", "日本語")];
+    let history: Vec<_> = cases
+        .iter()
+        .map(|(id, _)| json!({"sessionId":id,"timestamp":1000,"display":"hi","project":"/p"}))
+        .collect();
+    write_jsonl(&paths.claude.join("history.jsonl"), &history);
+    for (id, alias) in cases {
+        for (project, filename) in [("a-first", alias), ("z-last", id)] {
+            write_jsonl(
+                &paths
+                    .claude
+                    .join("projects")
+                    .join(project)
+                    .join(format!("{filename}.jsonl")),
+                &[json!({"type":"custom-title","customTitle":project})],
+            );
+        }
+    }
+    let sessions = provider(Agent::Claude).load_sessions(&paths).unwrap();
+    assert_eq!(sessions.len(), cases.len());
+    for (session, (id, _)) in sessions.iter().zip(cases) {
+        let expected = if paths
+            .claude
+            .join("projects/a-first")
+            .join(format!("{id}.jsonl"))
+            .is_file()
+        {
+            "a-first"
+        } else {
+            "z-last"
+        };
+        assert_eq!(session.name.as_deref(), Some(expected), "session ID {id:?}");
+    }
+}
+
+#[test]
+fn claude_title_lookup_respects_project_and_transcript_links() {
+    let tmp = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let paths = paths(tmp.path());
+    let projects = paths.claude.join("projects");
+    let ids = ["duplicate", "outside", "inside", "directory"];
+    let history: Vec<_> = ids
+        .iter()
+        .map(|id| json!({"sessionId":id,"timestamp":1000,"display":"hi","project":"/p"}))
+        .collect();
+    write_jsonl(&paths.claude.join("history.jsonl"), &history);
+    for (filename, title) in [
+        ("a-first/duplicate.jsonl", "first real project"),
+        ("z-last/duplicate.jsonl", "last real project"),
+        ("z-last/outside.jsonl", "safe fallback"),
+        ("z-last/target.txt", "internal link"),
+    ] {
+        write_jsonl(
+            &projects.join(filename),
+            &[json!({"type":"custom-title","customTitle":title})],
+        );
+    }
+    write_jsonl(
+        &outside.path().join("outside.jsonl"),
+        &[json!({"type":"custom-title","customTitle":"outside"})],
+    );
+    symlink(projects.join("z-last"), projects.join("00-linked-project")).unwrap();
+    symlink(
+        outside.path().join("outside.jsonl"),
+        projects.join("a-first/outside.jsonl"),
+    )
+    .unwrap();
+    symlink(
+        projects.join("z-last/target.txt"),
+        projects.join("a-first/inside.jsonl"),
+    )
+    .unwrap();
+    fs::create_dir(projects.join("a-first/directory.jsonl")).unwrap();
+    let sessions = provider(Agent::Claude).load_sessions(&paths).unwrap();
+    let names: Vec<_> = sessions
+        .iter()
+        .map(|session| session.name.as_deref())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            Some("first real project"),
+            Some("safe fallback"),
+            Some("internal link"),
+            None,
+        ]
+    );
+}
+
+#[test]
+fn claude_title_lookup_works_without_project_directory_listing_permission() {
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = paths(tmp.path());
+    write_jsonl(
+        &paths.claude.join("history.jsonl"),
+        &[json!({"sessionId":"duplicate","timestamp":1000,"display":"hi","project":"/p"})],
+    );
+    for project in ["a-first", "z-last"] {
+        write_jsonl(
+            &paths
+                .claude
+                .join("projects")
+                .join(project)
+                .join("duplicate.jsonl"),
+            &[json!({"type":"custom-title","customTitle":project})],
+        );
+    }
+    let first_project = paths.claude.join("projects/a-first");
+    let permissions = fs::metadata(&first_project).unwrap().permissions();
+    fs::set_permissions(&first_project, fs::Permissions::from_mode(0o111)).unwrap();
+    let result = provider(Agent::Claude).load_sessions(&paths);
+    fs::set_permissions(&first_project, permissions).unwrap();
+    let sessions = result.unwrap();
+    assert_eq!(sessions[0].name.as_deref(), Some("a-first"));
+}
+
+#[test]
+fn claude_title_lookup_refreshes_between_loads() {
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = paths(tmp.path());
+    write_jsonl(
+        &paths.claude.join("history.jsonl"),
+        &[json!({"sessionId":"id","timestamp":1000,"display":"hi","project":"/p"})],
+    );
+    let first = provider(Agent::Claude).load_sessions(&paths).unwrap();
+    assert!(first[0].name.is_none());
+    let transcript = paths.claude.join("projects/project/id.jsonl");
+    for title in ["created", "renamed"] {
+        write_jsonl(
+            &transcript,
+            &[json!({"type":"custom-title","customTitle":title})],
+        );
+        let sessions = provider(Agent::Claude).load_sessions(&paths).unwrap();
+        assert_eq!(sessions[0].name.as_deref(), Some(title));
+    }
+    fs::remove_file(transcript).unwrap();
+    let last = provider(Agent::Claude).load_sessions(&paths).unwrap();
+    assert!(last[0].name.is_none());
 }
 
 #[test]

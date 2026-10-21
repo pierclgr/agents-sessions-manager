@@ -225,6 +225,14 @@ directory, using Unix `exec`. The terminal is restored before the agent starts.
 When a session is highlighted in the TUI, Claude's per-session JSONL file is
 parsed to extract todos.
 
+Claude session loading builds a transcript filename index once per load,
+instead of searching every project for each session. Duplicate IDs still use
+the first matching project in sorted path order. Project-directory symlinks
+are skipped, and transcript targets must stay within `projects/`. The original
+lookup handles unreadable directory listings, non-ASCII filenames and unusual
+IDs, keeping filesystem name matching unchanged. Detail loading and deletion
+keep their existing lookup.
+
 **Claude Code session deletion** removes:
 
 1. The session's lines in `history.jsonl` (atomic rewrite: write to temp file, then rename), and the `paste-cache/` files that only those lines use.

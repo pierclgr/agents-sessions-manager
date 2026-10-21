@@ -26,18 +26,25 @@ struct HistoryEntry {
 }
 
 pub(crate) fn transcript(id: &str, root: &Path) -> Option<PathBuf> {
+    let projects = root.join("projects");
+    transcript_in_projects(id, &projects, children(&projects).into_iter())
+}
+
+fn transcript_in_projects(
+    id: &str,
+    projects: &Path,
+    directories: impl Iterator<Item = PathBuf>,
+) -> Option<PathBuf> {
     if !matches!(
         Path::new(id).components().collect::<Vec<_>>().as_slice(),
         [std::path::Component::Normal(_)]
     ) {
         return None;
     }
-    let projects = root.join("projects");
-    children(&projects)
-        .into_iter()
+    directories
         .filter(|path| std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir()))
         .map(|directory| directory.join(format!("{id}.jsonl")))
-        .find(|path| path.is_file() && is_within(path, &projects))
+        .find(|path| path.is_file() && is_within(path, projects))
 }
 
 impl AgentProvider for Claude {
@@ -99,6 +106,35 @@ impl AgentProvider for Claude {
                 project: project.into(),
             });
         }
+        if groups.is_empty() {
+            return Ok(vec![]);
+        }
+        let projects = paths.claude.join("projects");
+        // retain project order and let the filesystem decide case-sensitive matches
+        let transcript_directories = (|| {
+            let mut directories: HashMap<String, Vec<PathBuf>> = HashMap::new();
+            for directory in children(&projects) {
+                if !std::fs::symlink_metadata(&directory).is_ok_and(|metadata| metadata.is_dir()) {
+                    continue;
+                }
+                for entry in std::fs::read_dir(&directory).ok()? {
+                    let filename = entry.ok()?.file_name();
+                    let filename = filename.to_str()?;
+                    // keep the original lookup when a listing cannot represent every name
+                    if !filename.is_ascii() {
+                        return None;
+                    }
+                    let filename = filename.to_ascii_lowercase();
+                    if filename.ends_with(".jsonl") {
+                        directories
+                            .entry(filename)
+                            .or_default()
+                            .push(directory.clone());
+                    }
+                }
+            }
+            Some(directories)
+        })();
         let mut sessions = Vec::new();
         for (id, mut entries) in groups {
             entries.sort_by_key(|entry| entry.timestamp);
@@ -106,7 +142,15 @@ impl AgentProvider for Claude {
             let last = entries.last().unwrap();
             let mut custom = None;
             let mut generated = None;
-            if let Some(path) = transcript(&id, &paths.claude) {
+            let path = match &transcript_directories {
+                Some(directories) if id.is_ascii() && !id.contains('/') => {
+                    let filename = format!("{id}.jsonl").to_ascii_lowercase();
+                    let candidates = directories.get(&filename).into_iter().flatten().cloned();
+                    transcript_in_projects(&id, &projects, candidates)
+                }
+                _ => transcript(&id, &paths.claude),
+            };
+            if let Some(path) = path {
                 // avoid decoding full conversation messages when only the name is needed
                 let _ = visit_jsonl_matching(&path, &TITLE_MARKERS, |entry| {
                     match entry["type"].as_str() {
