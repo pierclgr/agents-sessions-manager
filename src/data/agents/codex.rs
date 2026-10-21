@@ -49,10 +49,7 @@ impl AgentProvider for Codex {
             while let Some(row) = rows.next()? {
                 let id: String = row.get(0)?;
                 let first_message: String = row.get(3)?;
-                let commands = prompts
-                    .get(&id)
-                    .cloned()
-                    .unwrap_or_else(|| vec![first_message]);
+                let commands = prompts.remove(&id).unwrap_or_else(|| vec![first_message]);
                 let (Some(created), Some(updated)) = (
                     Utc.timestamp_millis_opt(row.get(4)?).single(),
                     Utc.timestamp_millis_opt(row.get(5)?).single(),

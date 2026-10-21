@@ -263,6 +263,9 @@ limit, keeping the existing ellipsis and character boundaries for long text.
 Directory filtering resolves each distinct project path once per filter
 operation. Each operation starts fresh so changed or newly available symlink
 targets are reflected when the filter is applied again.
+Database providers transfer prompt lists into sessions without copying them.
+OpenCode restricts message loading to active top-level sessions before
+decoding message JSON, keeping prompt order and empty-session filtering.
 
 ## Running Tests
 

@@ -18,7 +18,7 @@ impl AgentProvider for OpenCode {
         }
         let result = (|| -> rusqlite::Result<Vec<Session>> {
             let connection = open_readonly(&paths.opencode_db)?;
-            let mut query = connection.prepare("SELECT session_id, data FROM session_message WHERE type = 'user' ORDER BY session_id, seq")?;
+            let mut query = connection.prepare("SELECT session_id, data FROM session_message WHERE type = 'user' AND session_id IN (SELECT id FROM session_v2 WHERE parent_id IS NULL AND time_archived IS NULL) ORDER BY session_id, seq")?;
             let mut rows = query.query([])?;
             let mut prompts: HashMap<String, Vec<String>> = HashMap::new();
             while let Some(row) = rows.next()? {
@@ -36,7 +36,7 @@ impl AgentProvider for OpenCode {
             let mut sessions = Vec::new();
             while let Some(row) = rows.next()? {
                 let id: String = row.get(0)?;
-                let Some(commands) = prompts.get(&id) else {
+                let Some(commands) = prompts.remove(&id) else {
                     continue;
                 };
                 let (Some(created), Some(updated)) = (
@@ -55,7 +55,7 @@ impl AgentProvider for OpenCode {
                     created_at: created,
                     last_active_at: updated,
                     latest_command: commands.last().cloned().unwrap_or_default(),
-                    commands: commands.clone(),
+                    commands,
                     todos: vec![],
                 });
             }
