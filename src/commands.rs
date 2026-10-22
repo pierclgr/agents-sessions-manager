@@ -9,9 +9,11 @@ use crate::{
     utils::{ProcessRunner, SHORT_ID_LENGTH, format_datetime, truncate},
 };
 use std::{
+    collections::HashMap,
     env,
     io::{self, Write},
     os::unix::process::CommandExt,
+    path::Path,
     process::Command,
     sync::{
         Arc,
@@ -21,6 +23,7 @@ use std::{
 
 const LIST_COMMAND_MAX: usize = 50;
 const DELETE_COMMAND_MAX: usize = 60;
+const LIST_USAGE: &str = "Usage: agents-sessions ls [-a | --all]";
 
 const HELP: &str = "Usage: agents-sessions [COMMAND] [OPTIONS]
 
@@ -29,16 +32,19 @@ Supported agents: Claude Code, Codex, OpenCode, Pi.
 
 Commands:
   (none)              Launch the interactive session browser
-  ls                  List the sessions of all agents in a compact format
+  ls                  List sessions from the current directory
+                      Use -a or --all to list every directory
   launch <ID>         Resume a session by its ID (any agent)
   delete <ID>         Delete a session and all its data (any agent)
 
 Options:
+  -a, --all           With 'ls', include sessions from every directory
   -h, --help          Show this help message and exit
 
 Examples:
   agents-sessions                         # Open interactive browser
-  agents-sessions ls                      # List all sessions
+  agents-sessions ls                      # List sessions from the current directory
+  agents-sessions ls --all                # List sessions from all directories
   agents-sessions launch abc123           # Resume session abc123
   agents-sessions delete abc123           # Delete session abc123
 ";
@@ -64,6 +70,26 @@ pub fn run() -> Result<(), String> {
             "Error: Unknown command '{command}'.\nRun 'agents-sessions --help' for usage information."
         ));
     }
+    let list_all = if command == "ls" {
+        let all = match args.get(1) {
+            None => false,
+            Some(option) if option == "-a" || option == "--all" => true,
+            Some(option) => {
+                return Err(format!(
+                    "Error: Unknown option '{}' for 'ls'.\n{LIST_USAGE}",
+                    option.to_string_lossy()
+                ));
+            }
+        };
+        if args.len() > 2 {
+            return Err(format!(
+                "Error: 'ls' accepts only one option.\n{LIST_USAGE}"
+            ));
+        }
+        all
+    } else {
+        false
+    };
     let paths = DataPaths::from_env()?;
     match command.as_str() {
         "" => {
@@ -74,6 +100,12 @@ pub fn run() -> Result<(), String> {
         }
         "ls" => {
             let mut sessions = load_session_summaries(&paths, None)?;
+            if !list_all {
+                let cwd = env::current_dir().map_err(|error| {
+                    format!("Error: Cannot read the current directory: {error}")
+                })?;
+                retain_current_directory_sessions(&mut sessions, &cwd);
+            }
             let indices: Vec<_> = (0..sessions.len()).collect();
             load_session_names(&mut sessions, &indices, &paths);
             list(&sessions);
@@ -93,6 +125,22 @@ pub fn run() -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn retain_current_directory_sessions(sessions: &mut Vec<Session>, cwd: &Path) {
+    let canonical_cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    let mut directory_matches = HashMap::new();
+    sessions.retain(|session| {
+        session.project_path == cwd
+            || *directory_matches
+                .entry(session.project_path.clone())
+                .or_insert_with(|| {
+                    session
+                        .project_path
+                        .canonicalize()
+                        .is_ok_and(|path| path == canonical_cwd)
+                })
+    });
 }
 
 fn list(sessions: &[Session]) {

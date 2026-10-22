@@ -32,6 +32,7 @@ Works on **macOS** and **Linux**. SQLite is bundled into the executable.
 - **Agent colors** -- Each agent name has its own color in the list and in the filter bar: Claude orange, Codex light blue, OpenCode light green, Pi light magenta (red, cyan, green and magenta when the terminal cannot define custom colors)
 - **Session names** -- Shows the name of a session, either the one you set (e.g. `/rename`) or the one the agent generated; sessions without a name show their ID
 - **CLI subcommands** -- Non-interactive `ls`, `launch`, and `delete` commands for scripting and quick access
+- **Current-directory listing** -- `ls` shows sessions from the current directory; `ls -a` or `ls --all` shows sessions from every directory
 - **Cross-project view** -- Aggregates sessions from every project into a single list, sorted by most recent activity
 - **Bounded startup loading** -- Keeps five recent prompts per session, loads Claude names for visible rows, and loads todos when highlighted
 - **Graceful degradation** -- Hides the right pane on narrow terminals, hides the banner on short terminals, falls back to 256-color when true-color is unavailable
@@ -192,8 +193,11 @@ index, or background search service.
 ### CLI Subcommands
 
 ```bash
-# List the sessions of all agents (tab-separated, suitable for piping)
+# List sessions from the current directory (tab-separated, suitable for piping)
 agents-sessions ls
+
+# List sessions from every directory
+agents-sessions ls --all
 
 # Resume a session of any agent by ID (supports prefix matching)
 agents-sessions launch <SESSION_ID>
@@ -205,7 +209,7 @@ agents-sessions delete <SESSION_ID>
 agents-sessions --help
 ```
 
-#### `ls` output example
+#### `ls --all` output example
 
 ```
 Agent     Session ID  Name          Project Directory         Last message     Created           Last Modified

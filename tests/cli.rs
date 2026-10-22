@@ -30,6 +30,7 @@ fn help_and_argument_errors_match_the_cli_contract() {
             String::from_utf8_lossy(&output.stdout)
                 .starts_with("Usage: agents-sessions [COMMAND] [OPTIONS]")
         );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("-a, --all"));
         assert!(output.stderr.is_empty());
     }
     for name in ["launch", "delete"] {
@@ -40,6 +41,17 @@ fn help_and_argument_errors_match_the_cli_contract() {
     let output = command(root.path()).arg("unknown").output().unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("Unknown command 'unknown'"));
+    for args in [vec!["ls", "--unknown"], vec!["ls", "unexpected"]] {
+        let output = command(root.path()).args(args).output().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("Usage: agents-sessions ls"));
+    }
+    let output = command(root.path())
+        .args(["ls", "--all", "unexpected"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("only one option"));
 }
 
 #[test]
@@ -64,7 +76,7 @@ fn listing_keeps_columns_short_ids_names_and_unicode() {
         ],
     );
     let output = command(root.path())
-        .arg("ls")
+        .args(["ls", "--all"])
         .env("TZ", "UTC")
         .output()
         .unwrap();
@@ -87,6 +99,76 @@ fn listing_keeps_columns_short_ids_names_and_unicode() {
     assert!(!lines[1].contains("abcdefgh-1234"));
     assert!(lines[1].contains("héllo 🙂"));
     assert!(lines[1].contains("1970-01-01 00:00"));
+}
+
+#[test]
+fn listing_defaults_to_the_exact_current_directory_and_aliases() {
+    let root = tempfile::tempdir().unwrap();
+    let current = root.path().join("current");
+    let child = current.join("child");
+    let other = root.path().join("other");
+    let alias = root.path().join("current-alias");
+    fs::create_dir_all(&child).unwrap();
+    fs::create_dir(&other).unwrap();
+    std::os::unix::fs::symlink(&current, &alias).unwrap();
+    write_jsonl(
+        &paths(root.path()).claude.join("history.jsonl"),
+        &[
+            json!({"sessionId":"current-session","timestamp":4000,"project":current,"display":"current"}),
+            json!({"sessionId":"child-session","timestamp":3000,"project":child,"display":"child"}),
+            json!({"sessionId":"other-session","timestamp":2000,"project":other,"display":"other"}),
+            json!({"sessionId":"alias-session","timestamp":1000,"project":alias,"display":"alias"}),
+        ],
+    );
+    for (args, expected) in [
+        (vec!["ls"], vec!["current-", "alias-se"]),
+        (
+            vec!["ls", "-a"],
+            vec!["current-", "child-se", "other-se", "alias-se"],
+        ),
+        (
+            vec!["ls", "--all"],
+            vec!["current-", "child-se", "other-se", "alias-se"],
+        ),
+    ] {
+        let output = command(root.path())
+            .args(args)
+            .current_dir(&current)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout).unwrap();
+        let ids: Vec<_> = text
+            .lines()
+            .skip(1)
+            .map(|line| line.split('\t').nth(1).unwrap().trim())
+            .collect();
+        assert_eq!(ids, expected);
+    }
+}
+
+#[test]
+fn listing_reports_empty_when_the_current_directory_has_no_sessions() {
+    let root = tempfile::tempdir().unwrap();
+    let current = root.path().join("current");
+    fs::create_dir(&current).unwrap();
+    write_jsonl(
+        &paths(root.path()).claude.join("history.jsonl"),
+        &[
+            json!({"sessionId":"elsewhere","timestamp":1000,"project":"/elsewhere","display":"other"}),
+        ],
+    );
+    let output = command(root.path())
+        .args(["ls"])
+        .current_dir(current)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "No sessions found.\n"
+    );
 }
 
 #[test]
@@ -231,7 +313,7 @@ fn listing_and_delete_confirmation_keep_names_and_latest_prompts() {
         &data.claude.join("projects/project/target.jsonl"),
         &[json!({"type":"custom-title","customTitle":"Saved session title"})],
     );
-    for args in [vec!["ls"], vec!["delete", "tar"]] {
+    for args in [vec!["ls", "--all"], vec!["delete", "tar"]] {
         let output = command(root.path())
             .args(args)
             .stdin(Stdio::null())
