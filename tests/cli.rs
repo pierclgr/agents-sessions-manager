@@ -6,7 +6,7 @@ use std::{
     fs,
     io::Write,
     os::unix::fs::PermissionsExt,
-    process::{Command, Stdio},
+    process::{Command, Output, Stdio},
 };
 
 fn command(root: &std::path::Path) -> Command {
@@ -20,6 +20,219 @@ fn command(root: &std::path::Path) -> Command {
     command
 }
 
+fn listed_ids(output: &Output) -> Vec<String> {
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .skip(1)
+        .map(|line| line.split('\t').nth(1).unwrap().trim().to_owned())
+        .collect()
+}
+
+#[test]
+fn ls_query_matches_full_metadata_and_excludes_messages_agents_and_created_dates() {
+    use chrono::{TimeZone, Utc};
+    let root = tempfile::tempdir().unwrap();
+    let data = paths(root.path());
+    let created = Utc
+        .with_ymd_and_hms(2025, 1, 1, 12, 0, 0)
+        .unwrap()
+        .timestamp_millis();
+    let modified = Utc
+        .with_ymd_and_hms(2026, 10, 24, 14, 30, 0)
+        .unwrap()
+        .timestamp_millis();
+    write_jsonl(
+        &data.claude.join("history.jsonl"),
+        &[
+            json!({"sessionId":"named","project":root.path(),"display":"prompt-only","timestamp":1000}),
+            json!({"sessionId":"01234567-hidden-suffix","project":root.path(),"display":"prompt-only","timestamp":2000}),
+            json!({"sessionId":"path","project":root.path().join("project-pattern"),"display":"prompt-only","timestamp":3000}),
+            json!({"sessionId":"date","project":root.path(),"display":"prompt-only","timestamp":created}),
+            json!({"sessionId":"date","project":root.path(),"display":"prompt-only","timestamp":modified}),
+        ],
+    );
+    write_jsonl(
+        &data.claude.join("projects/project/named.jsonl"),
+        &[
+            json!({"type":"custom-title","customTitle":"A long chat name with a hidden CAFÉ suffix"}),
+        ],
+    );
+    for (query, expected) in [
+        ("café", vec!["named"]),
+        ("HIDDEN-SUFFIX", vec!["01234567"]),
+        ("PROJECT-PATTERN", vec!["path"]),
+        ("2026-10-24 14:30", vec!["date"]),
+        ("10-2", vec!["date"]),
+        ("prompt-only", vec![]),
+        ("claude", vec![]),
+        ("2025", vec![]),
+    ] {
+        let output = command(root.path())
+            .args(["ls", "--all", query])
+            .env("TZ", "UTC")
+            .output()
+            .unwrap();
+        assert_eq!(listed_ids(&output), expected, "query: {query}");
+        if expected.is_empty() {
+            assert!(output.stdout.is_empty());
+            assert_eq!(
+                String::from_utf8_lossy(&output.stderr),
+                "No sessions found.\n"
+            );
+        }
+    }
+}
+
+#[test]
+fn ls_query_scopes_names_to_cwd_and_supports_all_flags_before_or_after_the_query() {
+    let root = tempfile::tempdir().unwrap();
+    let current = root.path().join("current");
+    let child = current.join("child");
+    let other = root.path().join("other");
+    let alias = root.path().join("alias");
+    fs::create_dir_all(&child).unwrap();
+    fs::create_dir(&other).unwrap();
+    std::os::unix::fs::symlink(&current, &alias).unwrap();
+    let data = paths(root.path());
+    write_jsonl(
+        &data.claude.join("history.jsonl"),
+        &[
+            json!({"sessionId":"cwd","project":current,"display":"hi","timestamp":4000}),
+            json!({"sessionId":"child","project":child,"display":"hi","timestamp":3000}),
+            json!({"sessionId":"other","project":other,"display":"hi","timestamp":2000}),
+            json!({"sessionId":"alias","project":alias,"display":"hi","timestamp":1000}),
+        ],
+    );
+    for id in ["cwd", "child", "other", "alias"] {
+        write_jsonl(
+            &data.claude.join(format!("projects/project/{id}.jsonl")),
+            &[json!({"type":"custom-title","customTitle":"Needle chat"})],
+        );
+    }
+    for (args, expected) in [
+        (vec!["ls", "needle chat"], vec!["cwd", "alias"]),
+        (
+            vec!["ls", "-a", "needle chat"],
+            vec!["cwd", "child", "other", "alias"],
+        ),
+        (
+            vec!["ls", "--all", "needle chat"],
+            vec!["cwd", "child", "other", "alias"],
+        ),
+        (
+            vec!["ls", "needle chat", "-a"],
+            vec!["cwd", "child", "other", "alias"],
+        ),
+        (
+            vec!["ls", "needle chat", "--all"],
+            vec!["cwd", "child", "other", "alias"],
+        ),
+    ] {
+        let output = command(root.path())
+            .args(args)
+            .current_dir(&current)
+            .output()
+            .unwrap();
+        assert_eq!(listed_ids(&output), expected);
+    }
+}
+
+#[test]
+fn ls_query_calendar_queries_return_the_same_matches_as_the_tui() {
+    use agents_sessions::{data::agents::load_all_sessions, tui::State};
+    use chrono::{Days, Local, Months};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let root = tempfile::tempdir().unwrap();
+    let data = paths(root.path());
+    // noon avoids ambiguous or missing clock times around DST changes
+    let now = Local::now()
+        .date_naive()
+        .and_hms_opt(12, 0, 0)
+        .unwrap()
+        .and_local_timezone(Local)
+        .single()
+        .unwrap();
+    write_jsonl(
+        &data.claude.join("history.jsonl"),
+        &[
+            json!({"sessionId":"current","project":root.path(),"display":"hi","timestamp":now.timestamp_millis()}),
+            json!({"sessionId":"previous","project":root.path(),"display":"hi","timestamp":now.checked_sub_days(Days::new(1)).unwrap().timestamp_millis()}),
+            json!({"sessionId":"older","project":root.path(),"display":"hi","timestamp":now.checked_sub_months(Months::new(12)).unwrap().timestamp_millis()}),
+        ],
+    );
+    write_jsonl(
+        &data.claude.join("projects/project/older.jsonl"),
+        &[json!({"type":"custom-title","customTitle":"Today notes"})],
+    );
+    let sessions = load_all_sessions(&data).unwrap();
+    for query in [
+        "TODAY",
+        "yesterday",
+        "this week",
+        "last week",
+        "this month",
+        "last month",
+        "this year",
+        "last year",
+    ] {
+        let mut state = State::new(sessions.clone(), root.path().to_path_buf());
+        state.handle_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        for character in query.chars() {
+            state.handle_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+        }
+        let expected: Vec<_> = state
+            .visible
+            .iter()
+            .map(|index| sessions[*index].session_id.clone())
+            .collect();
+        let output = command(root.path())
+            .args(["ls", query])
+            .current_dir(root.path())
+            .output()
+            .unwrap();
+        assert_eq!(listed_ids(&output), expected, "query: {query}");
+    }
+}
+
+#[test]
+fn ls_query_is_optional_and_supports_empty_and_option_like_text() {
+    let root = tempfile::tempdir().unwrap();
+    for args in [vec!["ls", "--unknown", "query"], vec!["ls", "two", "words"]] {
+        let output = command(root.path()).args(args).output().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("Usage: agents-sessions ls"));
+    }
+    let data = paths(root.path());
+    write_jsonl(
+        &data.claude.join("history.jsonl"),
+        &[json!({"sessionId":"named","project":root.path(),"display":"hi","timestamp":1000})],
+    );
+    write_jsonl(
+        &data.claude.join("projects/project/named.jsonl"),
+        &[json!({"type":"custom-title","customTitle":"lookup -a flag"})],
+    );
+    for args in [
+        vec!["ls"],
+        vec!["ls", "-a"],
+        vec!["ls", "--all"],
+        vec!["ls", ""],
+        vec!["ls", "--", "-a"],
+        vec!["ls", "--all", "--", "-a"],
+    ] {
+        let output = command(root.path())
+            .args(args)
+            .current_dir(root.path())
+            .output()
+            .unwrap();
+        assert_eq!(listed_ids(&output), vec!["named"]);
+    }
+}
+
 #[test]
 fn help_and_argument_errors_match_the_cli_contract() {
     let root = tempfile::tempdir().unwrap();
@@ -31,6 +244,7 @@ fn help_and_argument_errors_match_the_cli_contract() {
                 .starts_with("Usage: agents-sessions [COMMAND] [OPTIONS]")
         );
         assert!(String::from_utf8_lossy(&output.stdout).contains("-a, --all"));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("ls [QUERY]"));
         assert!(output.stderr.is_empty());
     }
     for name in ["launch", "delete"] {
@@ -38,20 +252,24 @@ fn help_and_argument_errors_match_the_cli_contract() {
         assert_eq!(output.status.code(), Some(1));
         assert!(String::from_utf8_lossy(&output.stderr).contains("requires a session ID argument"));
     }
-    let output = command(root.path()).arg("unknown").output().unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("Unknown command 'unknown'"));
-    for args in [vec!["ls", "--unknown"], vec!["ls", "unexpected"]] {
+    for name in ["unknown", "find"] {
+        let output = command(root.path()).arg(name).output().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(&format!("Unknown command '{name}'"))
+        );
+    }
+    for args in [vec!["ls", "--unknown"], vec!["ls", "one", "two"]] {
         let output = command(root.path()).args(args).output().unwrap();
         assert_eq!(output.status.code(), Some(1));
         assert!(String::from_utf8_lossy(&output.stderr).contains("Usage: agents-sessions ls"));
     }
     let output = command(root.path())
-        .args(["ls", "--all", "unexpected"])
+        .args(["ls", "--all", "unexpected", "extra"])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("only one option"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("one query"));
 }
 
 #[test]

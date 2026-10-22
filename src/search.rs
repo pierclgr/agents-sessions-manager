@@ -1,4 +1,4 @@
-//! cached session metadata and pure calendar matching for interactive search
+//! shared metadata and calendar matching for CLI and interactive search
 
 use crate::{data::Session, utils::format_datetime};
 use chrono::{Datelike, Days, Local, Months, NaiveDate};
@@ -8,8 +8,7 @@ const DAYS_PER_WEEK: u64 = 7;
 const MONTHS_PER_YEAR: u32 = 12;
 
 /// normalize metadata once per search, without copying conversation messages
-pub(super) struct Candidate {
-    pub index: usize,
+pub(crate) struct Candidate {
     pub name: String,
     project_path: String,
     session_id: String,
@@ -18,9 +17,8 @@ pub(super) struct Candidate {
 }
 
 impl Candidate {
-    pub fn new(index: usize, session: &Session) -> Self {
+    pub fn new(session: &Session) -> Self {
         Self {
-            index,
             name: session.name.as_deref().unwrap_or_default().to_lowercase(),
             project_path: session.project_path.to_string_lossy().to_lowercase(),
             session_id: session.session_id.to_lowercase(),
@@ -39,7 +37,7 @@ impl Candidate {
 }
 
 /// use local calendar dates rather than fixed-hour durations across DST changes
-pub(super) fn calendar_period(query: &str, today: NaiveDate) -> Option<Range<NaiveDate>> {
+pub(crate) fn calendar_period(query: &str, today: NaiveDate) -> Option<Range<NaiveDate>> {
     match query {
         "today" => Some(today..today.succ_opt()?),
         "yesterday" => Some(today.pred_opt()?..today),
@@ -81,7 +79,6 @@ mod tests {
 
     fn candidate(modified: &str) -> Candidate {
         Candidate {
-            index: 0,
             name: String::new(),
             project_path: String::new(),
             session_id: String::new(),

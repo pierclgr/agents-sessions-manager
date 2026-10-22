@@ -5,9 +5,11 @@ use crate::{
         DataPaths, Session,
         agents::{load_session_names, load_session_summaries, provider},
     },
+    search::{Candidate, calendar_period},
     tui,
     utils::{ProcessRunner, SHORT_ID_LENGTH, format_datetime, truncate},
 };
+use chrono::Local;
 use std::{
     collections::HashMap,
     env,
@@ -23,7 +25,7 @@ use std::{
 
 const LIST_COMMAND_MAX: usize = 50;
 const DELETE_COMMAND_MAX: usize = 60;
-const LIST_USAGE: &str = "Usage: agents-sessions ls [-a | --all]";
+const LIST_USAGE: &str = "Usage: agents-sessions ls [-a | --all] [QUERY]";
 
 const HELP: &str = "Usage: agents-sessions [COMMAND] [OPTIONS]
 
@@ -32,7 +34,7 @@ Supported agents: Claude Code, Codex, OpenCode, Pi.
 
 Commands:
   (none)              Launch the interactive session browser
-  ls                  List sessions from the current directory
+  ls [QUERY]          List or search sessions from the current directory
                       Use -a or --all to list every directory
   launch <ID>         Resume a session by its ID (any agent)
   delete <ID>         Delete a session and all its data (any agent)
@@ -45,6 +47,8 @@ Examples:
   agents-sessions                         # Open interactive browser
   agents-sessions ls                      # List sessions from the current directory
   agents-sessions ls --all                # List sessions from all directories
+  agents-sessions ls today                # Search sessions from the current directory
+  agents-sessions ls --all \"last week\"    # Search sessions from all directories
   agents-sessions launch abc123           # Resume session abc123
   agents-sessions delete abc123           # Delete session abc123
 ";
@@ -70,26 +74,38 @@ pub fn run() -> Result<(), String> {
             "Error: Unknown command '{command}'.\nRun 'agents-sessions --help' for usage information."
         ));
     }
-    let list_all = if command == "ls" {
-        let all = match args.get(1) {
-            None => false,
-            Some(option) if option == "-a" || option == "--all" => true,
-            Some(option) => {
+    let mut search_query = None;
+    let mut list_all = false;
+    if command == "ls" {
+        let mut options = true;
+        for argument in &args[1..] {
+            let argument = argument.to_string_lossy();
+            if options {
+                match argument.as_ref() {
+                    "-a" | "--all" => {
+                        list_all = true;
+                        continue;
+                    }
+                    "--" => {
+                        options = false;
+                        continue;
+                    }
+                    value if value.starts_with('-') && value != "-" => {
+                        return Err(format!(
+                            "Error: Unknown option '{value}' for 'ls'.\n{LIST_USAGE}"
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            if search_query.is_some() {
                 return Err(format!(
-                    "Error: Unknown option '{}' for 'ls'.\n{LIST_USAGE}",
-                    option.to_string_lossy()
+                    "Error: 'ls' accepts one query; quote text with spaces. Unexpected argument: '{argument}'.\n{LIST_USAGE}"
                 ));
             }
-        };
-        if args.len() > 2 {
-            return Err(format!(
-                "Error: 'ls' accepts only one option.\n{LIST_USAGE}"
-            ));
+            search_query = Some(argument.into_owned());
         }
-        all
-    } else {
-        false
-    };
+    }
     let paths = DataPaths::from_env()?;
     match command.as_str() {
         "" => {
@@ -108,6 +124,11 @@ pub fn run() -> Result<(), String> {
             }
             let indices: Vec<_> = (0..sessions.len()).collect();
             load_session_names(&mut sessions, &indices, &paths);
+            if let Some(query) = search_query.filter(|query| !query.is_empty()) {
+                let query = query.to_lowercase();
+                let period = calendar_period(&query, Local::now().date_naive());
+                sessions.retain(|session| Candidate::new(session).matches(&query, period.as_ref()));
+            }
             list(&sessions);
         }
         _ => {

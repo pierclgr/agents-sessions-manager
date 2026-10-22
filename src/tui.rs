@@ -1,12 +1,11 @@
 //! terminal rendering and a testable state machine
 
-mod search;
-
 use crate::{
     data::{
         Agent, DataPaths, RECENT_COMMAND_LIMIT, Session, SessionKey,
         agents::{load_session_names, load_session_summaries, provider},
     },
+    search::{Candidate, calendar_period},
     utils::{CommandRunner, ProcessRunner, SHORT_ID_LENGTH, format_datetime, truncate},
 };
 use chrono::Local;
@@ -18,7 +17,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
-use search::{Candidate, calendar_period};
 use std::{
     collections::{HashMap, HashSet},
     io,
@@ -92,7 +90,7 @@ pub struct State {
     cwd: PathBuf,
     enriched_key: Option<SessionKey>,
     named: HashSet<SessionKey>,
-    search_candidates: Vec<Candidate>,
+    search_candidates: Vec<(usize, Candidate)>,
     search_names_pending: bool,
 }
 
@@ -140,7 +138,7 @@ impl State {
         let indices: Vec<_> = if self.search_active {
             self.search_candidates
                 .iter()
-                .map(|candidate| candidate.index)
+                .map(|(index, _)| *index)
                 .filter(|index| !self.named.contains(&self.all_sessions[*index].key()))
                 .collect()
         } else {
@@ -161,8 +159,8 @@ impl State {
             self.named.insert(self.all_sessions[index].key());
         }
         if self.search_active {
-            for candidate in &mut self.search_candidates {
-                candidate.name = self.all_sessions[candidate.index]
+            for (index, candidate) in &mut self.search_candidates {
+                candidate.name = self.all_sessions[*index]
                     .name
                     .as_deref()
                     .unwrap_or_default()
@@ -215,7 +213,7 @@ impl State {
         self.search_candidates = self
             .visible
             .iter()
-            .map(|index| Candidate::new(*index, &self.all_sessions[*index]))
+            .map(|index| (*index, Candidate::new(&self.all_sessions[*index])))
             .collect();
         self.search_names_pending = true;
     }
@@ -228,8 +226,8 @@ impl State {
         self.visible.extend(
             self.search_candidates
                 .iter()
-                .filter(|candidate| candidate.matches(&query, period.as_ref()))
-                .map(|candidate| candidate.index),
+                .filter(|(_, candidate)| candidate.matches(&query, period.as_ref()))
+                .map(|(index, _)| *index),
         );
         self.reconcile_visible();
     }
@@ -281,7 +279,7 @@ impl State {
                 self.visible = self
                     .search_candidates
                     .iter()
-                    .map(|candidate| candidate.index)
+                    .map(|(index, _)| *index)
                     .collect();
                 self.search_candidates.clear();
                 self.search_names_pending = false;

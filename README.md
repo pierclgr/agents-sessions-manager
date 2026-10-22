@@ -32,7 +32,7 @@ Works on **macOS** and **Linux**. SQLite is bundled into the executable.
 - **Agent colors** -- Each agent name has its own color in the list and in the filter bar: Claude orange, Codex light blue, OpenCode light green, Pi light magenta (red, cyan, green and magenta when the terminal cannot define custom colors)
 - **Session names** -- Shows the name of a session, either the one you set (e.g. `/rename`) or the one the agent generated; sessions without a name show their ID
 - **CLI subcommands** -- Non-interactive `ls`, `launch`, and `delete` commands for scripting and quick access
-- **Current-directory listing** -- `ls` shows sessions from the current directory; `ls -a` or `ls --all` shows sessions from every directory
+- **Current-directory listing** -- `ls` uses the current directory; add `-a` or `--all` to include every directory, and an optional query to search
 - **Cross-project view** -- Aggregates sessions from every project into a single list, sorted by most recent activity
 - **Bounded startup loading** -- Keeps five recent prompts per session, loads Claude names for visible rows, and loads todos when highlighted
 - **Graceful degradation** -- Hides the right pane on narrow terminals, hides the banner on short terminals, falls back to 256-color when true-color is unavailable
@@ -199,6 +199,12 @@ agents-sessions ls
 # List sessions from every directory
 agents-sessions ls --all
 
+# Search sessions from the current directory
+agents-sessions ls "today"
+
+# Search sessions from every directory
+agents-sessions ls --all "last week"
+
 # Resume a session of any agent by ID (supports prefix matching)
 agents-sessions launch <SESSION_ID>
 
@@ -208,6 +214,17 @@ agents-sessions delete <SESSION_ID>
 # Show help
 agents-sessions --help
 ```
+
+`ls [-a | --all] [QUERY]` lists sessions, with an optional query using the same
+matching rules as `Ctrl+F`: case-insensitive
+substrings in names, full project paths, full IDs, and displayed modified
+dates, plus the calendar words listed above. Results use the same table and
+keep activity order. The default scope is the exact current directory,
+including symlink aliases; subdirectories are excluded. Add `-a` or `--all`
+before or after the query to search every directory. Quote queries with spaces.
+Use `--` before a query that starts with `-`, such as `ls -- -a`. With no query,
+or an empty query (`ls ""`), all sessions in the chosen scope are listed.
+No matches prints `No sessions found.` to stderr and exits successfully.
 
 #### `ls --all` output example
 
@@ -233,6 +250,7 @@ agents-sessions-manager/
 │   │   ├── agents.rs              # Provider interface and registry
 │   │   ├── agents/                # Claude, Codex, OpenCode, and Pi providers
 │   │   └── delete.rs              # Claude artifact and shared-file cleanup
+│   ├── search.rs                  # Shared CLI and TUI search matching
 │   ├── tui.rs                     # State, rendering, input, terminal lifecycle
 │   └── utils.rs                   # Formatting, files, SQLite, command runner
 ├── tests/                         # Rust tests with isolated agent data
