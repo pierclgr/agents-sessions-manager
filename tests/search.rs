@@ -207,12 +207,72 @@ fn arrows_and_enter_still_navigate_and_launch_in_search() {
 }
 
 #[test]
-fn search_preserves_quit_keys_and_ignores_modified_or_released_text() {
+fn escape_exits_search_and_restores_current_filters_in_both_modes() {
+    for mode in [Mode::Select, Mode::Delete] {
+        for scope in [DirectoryScope::Cwd, DirectoryScope::All] {
+            for query in ["", "match", "no-match"] {
+                let mut elsewhere = session(Agent::Codex, "match-other");
+                elsewhere.project_path = "/elsewhere".into();
+                let mut state = State::new(
+                    vec![
+                        session(Agent::Claude, "match-claude"),
+                        session(Agent::Codex, "match-current"),
+                        session(Agent::Codex, "hidden"),
+                        elsewhere,
+                    ],
+                    "/p/proj".into(),
+                );
+                state.mode = mode;
+                key(&mut state, KeyCode::Char('2'));
+                if scope == DirectoryScope::All {
+                    key(&mut state, KeyCode::Char('f'));
+                }
+                let expected = state.visible.clone();
+                toggle(&mut state);
+                type_query(&mut state, query);
+                key(&mut state, KeyCode::Down);
+                state.scroll_offset = state.cursor;
+
+                assert_eq!(key(&mut state, KeyCode::Esc), Action::None);
+                assert!(!state.search_active);
+                assert!(state.search_query.is_empty());
+                assert_eq!(state.visible, expected);
+                assert_eq!((state.cursor, state.scroll_offset), (0, 0));
+                assert_eq!(state.mode, mode);
+                assert_eq!(state.directory_scope, scope);
+                assert_eq!(state.filters, HashSet::from([Agent::Codex]));
+                assert!(!screen(&mut state, 240, 10).contains("Search:"));
+
+                toggle(&mut state);
+                assert!(state.search_active);
+                assert!(state.search_query.is_empty());
+                assert_eq!(state.visible, expected);
+                assert_eq!(key(&mut state, KeyCode::Esc), Action::None);
+                assert_eq!(key(&mut state, KeyCode::Esc), Action::Quit);
+            }
+        }
+    }
+}
+
+#[test]
+fn escape_exits_search_with_no_sessions() {
     for mode in [Mode::Select, Mode::Delete] {
         let mut state = State::new(vec![], "/p/proj".into());
         state.mode = mode;
         toggle(&mut state);
+        assert_eq!(key(&mut state, KeyCode::Esc), Action::None);
+        assert!(!state.search_active);
+        assert_eq!(state.mode, mode);
         assert_eq!(key(&mut state, KeyCode::Esc), Action::Quit);
+    }
+}
+
+#[test]
+fn search_preserves_control_c_and_ignores_modified_or_released_text() {
+    for mode in [Mode::Select, Mode::Delete] {
+        let mut state = State::new(vec![], "/p/proj".into());
+        state.mode = mode;
+        toggle(&mut state);
         assert_eq!(
             state.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
             Action::Quit
@@ -395,6 +455,8 @@ fn search_footer_survives_empty_and_small_screens_and_yields_to_messages() {
     assert!(rendered.contains("No sessions found."));
     assert!(rendered.contains("Search: no match"));
     assert!(rendered.contains("Ctrl+F: Clear"));
+    assert!(rendered.contains("ESC: Exit search"));
+    assert!(!rendered.contains("ESC: Quit"));
     assert!(!rendered.contains("ESC/Q"));
     assert!(!rendered.contains("F: CWD/All"));
     type_query(&mut state, &"界é".repeat(200));

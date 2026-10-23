@@ -264,9 +264,13 @@ impl State {
             };
         }
         self.message = None;
-        if key.modifiers.difference(KeyModifiers::SHIFT) == KeyModifiers::CONTROL
-            && matches!(key.code, KeyCode::Char('f' | 'F'))
-        {
+        let search_shortcut = key.modifiers.difference(KeyModifiers::SHIFT)
+            == KeyModifiers::CONTROL
+            && matches!(key.code, KeyCode::Char('f' | 'F'));
+        let search_escape = self.search_active
+            && key.code == KeyCode::Esc
+            && key.modifiers.difference(KeyModifiers::SHIFT).is_empty();
+        if search_shortcut || search_escape {
             if key.kind != KeyEventKind::Press {
                 return Action::None;
             }
@@ -622,7 +626,7 @@ fn draw_status(frame: &mut Frame, state: &State, palette: &Palette, area: Rect) 
             "Tab: Toggle select  |  Shift+Tab: Select range  |  Enter: Delete selected"
         };
         format!(
-            "{SEARCH_PREFIX}{}  |  Ctrl+F: Clear  |  ↑/↓ Navigate  |  {actions}  |  ESC: Quit",
+            "{SEARCH_PREFIX}{}  |  Ctrl+F: Clear  |  ↑/↓ Navigate  |  {actions}  |  ESC: Exit search",
             state.search_query
         )
     } else if state.visible.is_empty() {

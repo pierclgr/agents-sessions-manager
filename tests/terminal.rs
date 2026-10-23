@@ -316,6 +316,23 @@ fn search_clears_filters_and_arrows_and_enter_launch_the_matching_session() {
 }
 
 #[test]
+fn escape_leaves_search_without_exiting_the_browser() {
+    let root = tempfile::tempdir().unwrap();
+    history(root.path(), root.path());
+    let mut browser = Browser::start(root.path(), &[], None);
+    browser.wait_for("MODE: SELECT");
+    browser.input("\x06no-match");
+    browser.wait_for("Search:");
+    browser.wait_for("found.");
+    browser.text.clear();
+    browser.input("\x1b");
+    browser.wait_for("MODE: SELECT");
+    assert!(browser.child.try_wait().unwrap().is_none());
+    browser.input("\x1b");
+    browser.finish(0, true);
+}
+
+#[test]
 fn cli_control_c_aborts_confirmation_without_deleting() {
     let root = tempfile::tempdir().unwrap();
     history(root.path(), root.path());

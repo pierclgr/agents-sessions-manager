@@ -177,7 +177,9 @@ During search, letters, numbers, symbols, and spaces enter text instead of
 running shortcuts. `Backspace` removes the last character. `Up` and `Down`
 still navigate, and `Enter` still resumes a session or asks to delete selected
 sessions, depending on the mode. In DELETE mode, `Tab` and `Shift+Tab` still
-select sessions; hidden sessions are unselected. `Esc` and `Ctrl+C` quit.
+select sessions; hidden sessions are unselected. `Esc` clears the query and
+leaves search, restoring the sessions allowed by the current filters. `Ctrl+C`
+quits the program.
 Delete confirmation takes priority over search input; `Ctrl+F` during a
 confirmation only cancels the prompt. Press `Ctrl+F` again outside confirmation
 to clear the query and restore normal controls. `j` and `k` do not navigate,
