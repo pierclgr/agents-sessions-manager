@@ -570,6 +570,50 @@ fn unnamed_details_keep_the_full_id_and_recent_commands() {
 }
 
 #[test]
+fn deletion_stays_in_delete_mode_for_repeated_deletions_and_an_empty_list() {
+    use agents_sessions::{data::agents::load_session_summaries, utils::CommandRunner};
+    use serde_json::json;
+    use std::ffi::OsString;
+    struct NoCommands;
+    impl CommandRunner for NoCommands {
+        fn run(&self, _: &[OsString]) -> Result<(), String> {
+            panic!("Claude deletion must not launch a command");
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let paths = common::paths(root.path());
+    common::write_jsonl(
+        &paths.claude.join("history.jsonl"),
+        &[
+            json!({"sessionId":"first","timestamp":2000,"project":"/p/proj","display":"hi"}),
+            json!({"sessionId":"second","timestamp":1000,"project":"/p/proj","display":"hi"}),
+        ],
+    );
+    let mut state = State::new(
+        load_session_summaries(&paths, None).unwrap(),
+        "/p/proj".into(),
+    );
+    key(&mut state, KeyCode::Char('d'));
+    for (id, remaining) in [("first", 1), ("second", 0)] {
+        assert_eq!(state.current().unwrap().session_id, id);
+        key(&mut state, KeyCode::Tab);
+        key(&mut state, KeyCode::Enter);
+        assert!(state.confirming);
+        assert_eq!(key(&mut state, KeyCode::Char('y')), Action::Delete);
+        state.delete_selected(&paths, &NoCommands).unwrap();
+        assert_eq!(state.mode, Mode::Delete);
+        assert_eq!(state.visible.len(), remaining);
+        assert_eq!(state.all_sessions.len(), remaining);
+        assert!(state.selected.is_empty());
+        assert!(state.range_anchor.is_none());
+        assert!(!state.confirming);
+        assert_eq!(state.message.as_deref(), Some("Deleted 1 session(s)."));
+    }
+    key(&mut state, KeyCode::Char('d'));
+    assert_eq!(state.mode, Mode::Select);
+}
+
+#[test]
 fn deletion_reloads_sessions_keeps_filters_and_counts_failed_deletes() {
     use agents_sessions::{data::agents::load_all_sessions, utils::CommandRunner};
     use serde_json::json;
@@ -602,7 +646,7 @@ fn deletion_reloads_sessions_keeps_filters_and_counts_failed_deletes() {
         state.delete_selected(&paths, &FailingRunner).unwrap();
         assert_eq!(state.all_sessions.len(), 3);
         assert_eq!(state.visible.len(), count);
-        assert_eq!(state.mode, Mode::Select);
+        assert_eq!(state.mode, Mode::Delete);
         assert_eq!(state.directory_scope, scope);
         assert!(state.selected.is_empty());
         assert!(state.range_anchor.is_none());

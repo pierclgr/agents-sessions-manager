@@ -433,7 +433,6 @@ impl State {
         let deleted = keys.iter().filter(|key| !remaining.contains(key)).count();
         self.selected.clear();
         self.range_anchor = None;
-        self.mode = Mode::Select;
         self.enriched_key = None;
         self.named.clear();
         self.apply_filter();

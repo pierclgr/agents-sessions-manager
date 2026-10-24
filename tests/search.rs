@@ -435,7 +435,7 @@ fn deletion_rebuilds_search_candidates_and_preserves_the_query() {
     key(&mut state, KeyCode::Tab);
     state.delete_selected(&paths, &NoCommands).unwrap();
     state.prepare_frame(&paths, area);
-    assert_eq!(state.mode, Mode::Select);
+    assert_eq!(state.mode, Mode::Delete);
     assert_eq!(state.visible.len(), 1);
     assert_eq!(state.current().unwrap().session_id, "second");
     assert!(screen(&mut state, 180, 30).contains("Deleted 1 session(s)."));

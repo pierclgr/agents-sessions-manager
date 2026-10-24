@@ -153,6 +153,9 @@ SELECT mode uses a muted orange (`#A36847`) accent with white text (gray when cu
 | `D`              | Switch back to SELECT mode           |
 | `Esc` / `Q`      | Quit                                 |
 
+After deletion, the browser stays in DELETE mode and clears the selection.
+Press `D` to return to SELECT mode.
+
 `F`, `D`, and `Q` also work in lowercase. The directory and mode toggles
 work when no sessions are shown. During delete confirmation, `Esc`, `Q`,
 and the toggle keys cancel the prompt without changing the filters or mode.
