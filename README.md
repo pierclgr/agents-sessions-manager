@@ -110,7 +110,7 @@ SELECT mode uses a muted orange (`#A36847`) accent with white text (gray when cu
 ┌──────────────────────────────────┬──────────────────────┐
 │  ASCII Banner                    │                      │
 ├──────────────────────────────────┤                      │
-│  F: CWD | Agents: [x] 1 Claude    │                      │
+│  F: CWD | Agents: [x] 1 Claude   │                      │
 ├──────────────────────────────────┤  Session details     │
 │  Session list (60%)              │  (40%)               │
 │                                  │                      │
