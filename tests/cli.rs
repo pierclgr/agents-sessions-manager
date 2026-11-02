@@ -1,11 +1,13 @@
 mod common;
 
 use common::{paths, write_jsonl};
+use rusqlite::{Connection, params};
 use serde_json::json;
 use std::{
     fs,
     io::Write,
     os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
     process::{Command, Output, Stdio},
 };
 
@@ -31,6 +33,356 @@ fn listed_ids(output: &Output) -> Vec<String> {
         .skip(1)
         .map(|line| line.split('\t').nth(1).unwrap().trim().to_owned())
         .collect()
+}
+
+fn resume_fixture(root: &Path) -> PathBuf {
+    let data = paths(root);
+    let project = root.join("project's folder");
+    let child = project.join("child");
+    let other = root.join("other");
+    let alias = root.join("alias");
+    let bin = root.join("bin");
+    for directory in [&child, &other, &bin, &data.codex] {
+        fs::create_dir_all(directory).unwrap();
+    }
+    std::os::unix::fs::symlink(&project, &alias).unwrap();
+    for agent in ["claude", "codex", "opencode", "pi"] {
+        let executable = bin.join(agent);
+        fs::write(
+            &executable,
+            "#!/bin/sh\nprintf '%s\\n' \"${0##*/}\" \"$PWD\" \"$#\" \"$@\"\nexit 7\n",
+        )
+        .unwrap();
+        fs::set_permissions(executable, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    write_jsonl(
+        &data.claude.join("history.jsonl"),
+        &[
+            json!({"sessionId":"claude-old","project":project,"display":"hi","timestamp":1000}),
+            json!({"sessionId":"claude-new","project":alias,"display":"hi","timestamp":2000}),
+            json!({"sessionId":"claude-other","project":other,"display":"hi","timestamp":9000}),
+            json!({"sessionId":"claude-child","project":child,"display":"hi","timestamp":10000}),
+        ],
+    );
+    for id in ["claude-old", "claude-new"] {
+        write_jsonl(
+            &data.claude.join(format!("projects/project/{id}.jsonl")),
+            &[json!({"type":"custom-title","customTitle":"Fix CAFÉ bug"})],
+        );
+    }
+    let codex = Connection::open(data.codex.join("state_1.sqlite")).unwrap();
+    codex
+        .execute_batch(
+            "CREATE TABLE threads (id TEXT, cwd TEXT, name TEXT, first_user_message TEXT,
+        created_at_ms INTEGER, updated_at_ms INTEGER, archived INTEGER, thread_source TEXT);",
+        )
+        .unwrap();
+    for (id, directory, updated) in [
+        ("codex-old", &project, 1000),
+        ("codex-new", &project, 3000),
+        ("codex-other", &other, 11000),
+    ] {
+        codex
+            .execute(
+                "INSERT INTO threads VALUES (?1, ?2, 'Fix CAFÉ bug', 'hi', 1000, ?3, 0, 'user')",
+                params![id, directory.to_str().unwrap(), updated],
+            )
+            .unwrap();
+    }
+    fs::create_dir_all(data.opencode_db.parent().unwrap()).unwrap();
+    let opencode = Connection::open(&data.opencode_db).unwrap();
+    opencode
+        .execute_batch(
+            "CREATE TABLE session_v2 (id TEXT, directory TEXT, title TEXT, time_created INTEGER,
+            time_updated INTEGER, parent_id TEXT, time_archived INTEGER);
+            CREATE TABLE session_message (session_id TEXT, data TEXT, type TEXT, seq INTEGER);",
+        )
+        .unwrap();
+    for (id, updated) in [("opencode-old", 1000), ("opencode-new", 4000)] {
+        opencode
+            .execute(
+                "INSERT INTO session_v2 VALUES (?1, ?2, 'Fix CAFÉ bug', 1000, ?3, NULL, NULL)",
+                params![id, project.to_str().unwrap(), updated],
+            )
+            .unwrap();
+        opencode
+            .execute(
+                "INSERT INTO session_message VALUES (?1, '{\"text\":\"hi\"}', 'user', 1)",
+                [id],
+            )
+            .unwrap();
+    }
+    for (id, timestamp) in [
+        ("pi-old", "1970-01-01T00:00:01Z"),
+        ("pi-new", "1970-01-01T00:00:05Z"),
+    ] {
+        write_jsonl(
+            &data.pi_sessions.join(format!("project/1970_{id}.jsonl")),
+            &[
+                json!({"type":"session","id":id,"cwd":project,"timestamp":"1970-01-01T00:00:01Z"}),
+                json!({"type":"session_info","name":"Fix CAFÉ bug"}),
+                json!({"type":"message","timestamp":timestamp,"message":{"role":"user","content":"hi"}}),
+            ],
+        );
+    }
+    project
+}
+
+fn assert_resumed(output: &Output, root: &Path, agent: &str, id: &str) {
+    assert_eq!(
+        output.status.code(),
+        Some(7),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let project = root.join("project's folder").canonicalize().unwrap();
+    let (option, target) = match agent {
+        "claude" => ("--resume", id.to_owned()),
+        "codex" => ("resume", id.to_owned()),
+        "opencode" => ("--session", id.to_owned()),
+        "pi" => (
+            "--session",
+            paths(root)
+                .pi_sessions
+                .join(format!("project/1970_{id}.jsonl"))
+                .display()
+                .to_string(),
+        ),
+        _ => panic!("Unexpected agent: {agent}"),
+    };
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .collect::<Vec<_>>(),
+        [agent, project.to_str().unwrap(), "2", option, &target]
+    );
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn resume_latest_uses_cwd_activity_order_and_optional_agent_filter() {
+    let root = tempfile::tempdir().unwrap();
+    let project = resume_fixture(root.path());
+    for cwd in [&project, &root.path().join("alias")] {
+        let output = command(root.path())
+            .args(["resume", "latest"])
+            .current_dir(cwd)
+            .env("PATH", root.path().join("bin"))
+            .output()
+            .unwrap();
+        assert_resumed(&output, root.path(), "pi", "pi-new");
+        for agent in ["claude", "codex", "opencode", "pi"] {
+            let agent_option = format!("--agent={agent}");
+            for args in [
+                vec!["resume", "latest", "--agent", agent],
+                vec!["resume", "latest", "-a", agent],
+                vec!["resume", "--agent", agent, "latest"],
+                vec!["resume", "latest", &agent_option],
+            ] {
+                let output = command(root.path())
+                    .args(args)
+                    .current_dir(cwd)
+                    .env("PATH", root.path().join("bin"))
+                    .output()
+                    .unwrap();
+                assert_resumed(&output, root.path(), agent, &format!("{agent}-new"));
+            }
+        }
+    }
+}
+
+#[test]
+fn resume_names_are_exact_case_insensitive_and_filtered_by_agent() {
+    let root = tempfile::tempdir().unwrap();
+    resume_fixture(root.path());
+    for agent in ["claude", "codex", "opencode", "pi"] {
+        for args in [
+            vec!["resume", "fIX café BUG", "--agent", agent],
+            vec!["resume", "-a", agent, "Fix CAFÉ bug"],
+        ] {
+            let output = command(root.path())
+                .args(args)
+                .current_dir(root.path())
+                .env("PATH", root.path().join("bin"))
+                .output()
+                .unwrap();
+            if agent == "codex" {
+                assert_eq!(output.status.code(), Some(7));
+                let text = String::from_utf8_lossy(&output.stdout);
+                assert!(text.starts_with("codex\n"));
+                assert!(
+                    text.contains(
+                        root.path()
+                            .join("other")
+                            .canonicalize()
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                    )
+                );
+                assert!(text.ends_with("resume\ncodex-other\n"));
+            } else {
+                assert_resumed(&output, root.path(), agent, &format!("{agent}-new"));
+            }
+        }
+    }
+    let output = command(root.path())
+        .args(["resume", "Fix CAFÉ bug"])
+        .env("PATH", root.path().join("bin"))
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&output.stdout).ends_with("resume\ncodex-other\n"));
+    assert_eq!(output.status.code(), Some(7));
+    for target in ["Fix CAFÉ", "missing"] {
+        let output = command(root.path())
+            .args(["resume", target])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains(&format!("Session '{target}' not found"))
+        );
+    }
+}
+
+#[test]
+fn resume_ids_take_priority_over_names_and_respect_agent_filters() {
+    let root = tempfile::tempdir().unwrap();
+    resume_fixture(root.path());
+    write_jsonl(
+        &paths(root.path())
+            .claude
+            .join("projects/project/claude-new.jsonl"),
+        &[json!({"type":"custom-title","customTitle":"pi-new"})],
+    );
+    for args in [
+        vec!["resume", "pi-new"],
+        vec!["resume", "pi", "--agent", "pi"],
+        vec!["resume", "pi", "-a", "pi"],
+    ] {
+        let output = command(root.path())
+            .args(args)
+            .env("PATH", root.path().join("bin"))
+            .output()
+            .unwrap();
+        assert_resumed(&output, root.path(), "pi", "pi-new");
+    }
+    let output = command(root.path())
+        .args(["resume", "pi-new", "--agent", "claude"])
+        .env("PATH", root.path().join("bin"))
+        .output()
+        .unwrap();
+    assert_resumed(&output, root.path(), "claude", "claude-new");
+    let output = command(root.path())
+        .args(["resume", "pi-new", "--agent", "codex"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("Session 'pi-new' not found"));
+    assert!(error.contains("codex"));
+}
+
+#[test]
+fn resume_latest_reports_no_matches_without_resuming_another_directory_or_agent() {
+    let root = tempfile::tempdir().unwrap();
+    let project = resume_fixture(root.path());
+    fs::remove_dir_all(paths(root.path()).pi_sessions).unwrap();
+    for args in [
+        vec!["resume", "latest"],
+        vec!["resume", "latest", "-a", "pi"],
+    ] {
+        let output = command(root.path())
+            .args(&args)
+            .current_dir(if args.len() == 2 {
+                root.path()
+            } else {
+                &project
+            })
+            .env("PATH", root.path().join("bin"))
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("No sessions found"));
+        assert!(error.contains("current directory"));
+        if args.len() > 2 {
+            assert!(error.contains("pi"));
+        }
+    }
+}
+
+#[test]
+fn resume_agent_filter_loads_only_the_selected_agents_data() {
+    let root = tempfile::tempdir().unwrap();
+    let project = resume_fixture(root.path());
+    let history = paths(root.path()).claude.join("history.jsonl");
+    fs::remove_file(&history).unwrap();
+    // a directory cannot be read as JSONL, even when running tests as root
+    fs::create_dir(history).unwrap();
+    for (target, expected_id) in [
+        ("codex-new", "codex-new"),
+        ("Fix CAFÉ bug", "codex-other"),
+        ("latest", "codex-new"),
+    ] {
+        let output = command(root.path())
+            .args(["resume", target, "--agent", "codex"])
+            .current_dir(&project)
+            .env("PATH", root.path().join("bin"))
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(7), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stdout).ends_with(&format!("resume\n{expected_id}\n"))
+        );
+        assert!(output.stderr.is_empty());
+    }
+}
+
+#[test]
+fn resume_supports_option_like_names_after_the_option_separator() {
+    let root = tempfile::tempdir().unwrap();
+    resume_fixture(root.path());
+    write_jsonl(
+        &paths(root.path())
+            .claude
+            .join("projects/project/claude-new.jsonl"),
+        &[json!({"type":"custom-title","customTitle":"--agent"})],
+    );
+    let output = command(root.path())
+        .args(["resume", "-a", "claude", "--", "--agent"])
+        .env("PATH", root.path().join("bin"))
+        .output()
+        .unwrap();
+    assert_resumed(&output, root.path(), "claude", "claude-new");
+}
+
+#[test]
+fn resume_rejects_invalid_arguments_before_loading_sessions() {
+    let root = tempfile::tempdir().unwrap();
+    for args in [
+        vec!["resume"],
+        vec!["resume", ""],
+        vec!["resume", "--agent", "codex"],
+        vec!["resume", "latest", "-a"],
+        vec!["resume", "latest", "--agent"],
+        vec!["resume", "latest", "--agent", ""],
+        vec!["resume", "latest", "--agent", "unknown"],
+        vec!["resume", "latest", "--unknown"],
+        vec!["resume", "one", "two"],
+        vec!["resume", "latest", "-a", "codex", "--agent", "pi"],
+    ] {
+        let output = command(root.path()).args(&args).output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{args:?}");
+        assert!(output.stdout.is_empty());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("Usage: agents-sessions resume"),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[test]
@@ -245,14 +597,15 @@ fn help_and_argument_errors_match_the_cli_contract() {
         );
         assert!(String::from_utf8_lossy(&output.stdout).contains("-a, --all"));
         assert!(String::from_utf8_lossy(&output.stdout).contains("ls [QUERY]"));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("resume <ID | NAME | latest>"));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("-a, --agent"));
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("launch <ID>"));
         assert!(output.stderr.is_empty());
     }
-    for name in ["launch", "delete"] {
-        let output = command(root.path()).arg(name).output().unwrap();
-        assert_eq!(output.status.code(), Some(1));
-        assert!(String::from_utf8_lossy(&output.stderr).contains("requires a session ID argument"));
-    }
-    for name in ["unknown", "find"] {
+    let output = command(root.path()).arg("delete").output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("requires a session ID argument"));
+    for name in ["unknown", "find", "launch"] {
         let output = command(root.path()).arg(name).output().unwrap();
         assert_eq!(output.status.code(), Some(1));
         assert!(
@@ -390,7 +743,7 @@ fn listing_reports_empty_when_the_current_directory_has_no_sessions() {
 }
 
 #[test]
-fn launch_preserves_argument_boundaries_and_working_directory() {
+fn resume_preserves_argument_boundaries_and_working_directory() {
     let root = tempfile::tempdir().unwrap();
     let project = root.path().join("project's folder");
     let bin = root.path().join("bin");
@@ -410,7 +763,7 @@ fn launch_preserves_argument_boundaries_and_working_directory() {
         ],
     );
     let output = command(root.path())
-        .args(["launch", "session"])
+        .args(["resume", "session"])
         .env("PATH", &bin)
         .output()
         .unwrap();
@@ -433,7 +786,7 @@ fn launch_preserves_argument_boundaries_and_working_directory() {
 fn missing_session_directory_and_executable_fail_cleanly() {
     let root = tempfile::tempdir().unwrap();
     let output = command(root.path())
-        .args(["launch", "missing"])
+        .args(["resume", "missing"])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
@@ -445,7 +798,7 @@ fn missing_session_directory_and_executable_fail_cleanly() {
         ],
     );
     let output = command(root.path())
-        .args(["launch", "id"])
+        .args(["resume", "id"])
         .output()
         .unwrap();
     assert!(String::from_utf8_lossy(&output.stderr).contains("no longer exists"));
@@ -454,7 +807,7 @@ fn missing_session_directory_and_executable_fail_cleanly() {
         &[json!({"sessionId":"id","project":root.path(),"display":"hi","timestamp":1000})],
     );
     let output = command(root.path())
-        .args(["launch", "id"])
+        .args(["resume", "id"])
         .env("PATH", root.path())
         .output()
         .unwrap();

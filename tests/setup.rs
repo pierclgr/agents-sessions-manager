@@ -111,7 +111,7 @@ fn installs_a_regular_executable_and_relative_alias() {
             String::from_utf8_lossy(&output.stderr),
             "No sessions found.\n"
         );
-        for route in ["launch", "delete"] {
+        for route in ["resume", "delete"] {
             assert_eq!(
                 fixture.run(name, &[route, "missing"]).status.code(),
                 Some(1)

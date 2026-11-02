@@ -31,7 +31,8 @@ Works on **macOS** and **Linux**. SQLite is bundled into the executable.
   and modified dates within the current filters; press it again to clear
 - **Agent colors** -- Each agent name has its own color in the list and in the filter bar: Claude orange, Codex light blue, OpenCode light green, Pi light magenta (red, cyan, green and magenta when the terminal cannot define custom colors)
 - **Session names** -- Shows the name of a session, either the one you set (e.g. `/rename`) or the one the agent generated; sessions without a name show their ID
-- **CLI subcommands** -- Non-interactive `ls`, `launch`, and `delete` commands for scripting and quick access
+- **CLI subcommands** -- Non-interactive `ls`, `resume`, and `delete` commands for scripting and quick access
+- **Quick resume** -- Resume by ID or name, or resume the latest session in the current directory, with an optional agent filter
 - **Current-directory listing** -- `ls` uses the current directory; add `-a` or `--all` to include every directory, and an optional query to search
 - **Cross-project view** -- Aggregates sessions from every project into a single list, sorted by most recent activity
 - **Bounded startup loading** -- Keeps five recent prompts per session, loads Claude names for visible rows, and loads todos when highlighted
@@ -211,7 +212,17 @@ agents-sessions ls "today"
 agents-sessions ls --all "last week"
 
 # Resume a session of any agent by ID (supports prefix matching)
-agents-sessions launch <SESSION_ID>
+agents-sessions resume <SESSION_ID>
+
+# Resume a session by its name (quote names with spaces)
+agents-sessions resume "Fix login bug"
+
+# Resume the latest session in the current directory, across all agents
+agents-sessions resume latest
+
+# Resume the latest session of a specific agent in the current directory
+agents-sessions resume latest --agent codex
+agents-sessions resume latest -a codex
 
 # Delete a session of any agent by ID (with confirmation prompt)
 agents-sessions delete <SESSION_ID>
@@ -230,6 +241,19 @@ before or after the query to search every directory. Quote queries with spaces.
 Use `--` before a query that starts with `-`, such as `ls -- -a`. With no query,
 or an empty query (`ls ""`), all sessions in the chosen scope are listed.
 No matches prints `No sessions found.` to stderr and exits successfully.
+
+`resume <ID | NAME | latest> [-a AGENT | --agent AGENT]` replaces the former
+`launch` command. ID prefixes are checked first, then exact session names
+without case sensitivity. ID and name lookups include all directories. If
+several sessions match, the most recently active one is resumed.
+
+`resume latest` uses the most recent activity in the exact current directory,
+including symlink aliases; subdirectories are excluded. Without an agent
+filter, sessions from all agents are included. `-a` and `--agent` filter ID,
+name, and latest lookups by `claude`, `codex`, `opencode`, or `pi`. The filter
+can appear before or after the ID, name, or `latest`. Use `--` before a name
+that starts with `-`. Missing sessions and invalid arguments exit with an
+error. `ls -a` continues to mean all directories.
 
 #### `ls --all` output example
 
@@ -298,8 +322,12 @@ IDs, keeping filesystem name matching unchanged. Detail loading keeps its
 direct lookup; a deletion batch shares one transcript index.
 
 The CLI and TUI load session summaries with at most five recent prompts each.
-Launch and delete lookups restrict loading to the literal ID prefix and keep
-the same activity order and tie rules. Listing loads all names before printing;
+Resume by ID and delete lookups restrict loading to the literal ID prefix and
+keep the same activity order and tie rules. When no ID matches, resume loads
+names for the selected agent or all agents and checks for an exact name.
+An agent filter loads only that agent's data. Latest resume uses the shared
+directory filter and activity order without loading names. Listing loads all
+names before printing;
 delete confirmation loads the chosen session's name. The browser loads Claude
 names only for rows about to be shown, before drawing them. Library callers
 can still request complete prompt histories with the existing loading API.

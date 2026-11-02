@@ -2,7 +2,7 @@
 
 use crate::{
     data::{
-        DataPaths, Session,
+        Agent, DataPaths, Session,
         agents::{load_session_names, load_session_summaries, provider},
     },
     search::{Candidate, calendar_period},
@@ -11,6 +11,7 @@ use crate::{
 };
 use chrono::Local;
 use std::{
+    cmp::Reverse,
     collections::HashMap,
     env,
     io::{self, Write},
@@ -26,6 +27,8 @@ use std::{
 const LIST_COMMAND_MAX: usize = 50;
 const DELETE_COMMAND_MAX: usize = 60;
 const LIST_USAGE: &str = "Usage: agents-sessions ls [-a | --all] [QUERY]";
+const RESUME_USAGE: &str =
+    "Usage: agents-sessions resume <ID | NAME | latest> [-a AGENT | --agent AGENT]";
 
 const HELP: &str = "Usage: agents-sessions [COMMAND] [OPTIONS]
 
@@ -33,15 +36,17 @@ Agents Sessions Manager - Browse, resume, and delete coding agent sessions.
 Supported agents: Claude Code, Codex, OpenCode, Pi.
 
 Commands:
-  (none)              Launch the interactive session browser
-  ls [QUERY]          List or search sessions from the current directory
-                      Use -a or --all to list every directory
-  launch <ID>         Resume a session by its ID (any agent)
-  delete <ID>         Delete a session and all its data (any agent)
+  (none)                       Launch the interactive session browser
+  ls [QUERY]                   List or search sessions from the current directory
+                               Use -a or --all to list every directory
+  resume <ID | NAME | latest>   Resume by ID prefix or exact name (any directory),
+                               or the latest session in the current directory
+  delete <ID>                  Delete a session and all its data (any agent)
 
 Options:
-  -a, --all           With 'ls', include sessions from every directory
-  -h, --help          Show this help message and exit
+  -a, --all                    With 'ls', include sessions from every directory
+  -a, --agent AGENT            With 'resume', filter by claude, codex, opencode, or pi
+  -h, --help                   Show this help message and exit
 
 Examples:
   agents-sessions                         # Open interactive browser
@@ -49,7 +54,10 @@ Examples:
   agents-sessions ls --all                # List sessions from all directories
   agents-sessions ls today                # Search sessions from the current directory
   agents-sessions ls --all \"last week\"    # Search sessions from all directories
-  agents-sessions launch abc123           # Resume session abc123
+  agents-sessions resume abc123           # Resume session abc123
+  agents-sessions resume \"Fix login bug\"  # Resume by name (case-insensitive)
+  agents-sessions resume latest           # Resume the latest session in this directory
+  agents-sessions resume latest -a codex  # Resume the latest Codex session here
   agents-sessions delete abc123           # Delete session abc123
 ";
 
@@ -63,19 +71,20 @@ pub fn run() -> Result<(), String> {
         print!("{HELP}");
         return Ok(());
     }
-    if matches!(command.as_str(), "launch" | "delete") && args.get(1).is_none_or(|id| id.is_empty())
-    {
+    if command == "delete" && args.get(1).is_none_or(|id| id.is_empty()) {
         return Err(format!(
             "Error: '{command}' requires a session ID argument.\nUsage: agents-sessions {command} <SESSION_ID>"
         ));
     }
-    if !matches!(command.as_str(), "" | "ls" | "launch" | "delete") {
+    if !matches!(command.as_str(), "" | "ls" | "resume" | "delete") {
         return Err(format!(
             "Error: Unknown command '{command}'.\nRun 'agents-sessions --help' for usage information."
         ));
     }
     let mut search_query = None;
     let mut list_all = false;
+    let mut resume_target = None;
+    let mut resume_agent = None;
     if command == "ls" {
         let mut options = true;
         for argument in &args[1..] {
@@ -106,6 +115,68 @@ pub fn run() -> Result<(), String> {
             search_query = Some(argument.into_owned());
         }
     }
+    if command == "resume" {
+        let mut arguments = args[1..].iter();
+        let mut options = true;
+        while let Some(argument) = arguments.next() {
+            let argument = argument.to_string_lossy();
+            if options {
+                let agent_name = match argument.as_ref() {
+                    "--" => {
+                        options = false;
+                        continue;
+                    }
+                    "-a" | "--agent" => Some(
+                        arguments
+                            .next()
+                            .ok_or_else(|| {
+                                format!("Error: '{argument}' requires an agent argument.\n{RESUME_USAGE}")
+                            })?
+                            .to_string_lossy()
+                            .into_owned(),
+                    ),
+                    value if value.starts_with("--agent=") => {
+                        value.strip_prefix("--agent=").map(str::to_owned)
+                    }
+                    value if value.starts_with('-') && value != "-" => {
+                        return Err(format!(
+                            "Error: Unknown option '{value}' for 'resume'.\n{RESUME_USAGE}"
+                        ));
+                    }
+                    _ => None,
+                };
+                if let Some(agent_name) = agent_name {
+                    if resume_agent.is_some() {
+                        return Err(format!(
+                            "Error: 'resume' accepts one agent filter.\n{RESUME_USAGE}"
+                        ));
+                    }
+                    resume_agent = Some(
+                        Agent::ALL
+                            .into_iter()
+                            .find(|agent| agent.key() == agent_name)
+                            .ok_or_else(|| {
+                                format!(
+                                    "Error: Unknown agent '{agent_name}'. Expected claude, codex, opencode, or pi.\n{RESUME_USAGE}"
+                                )
+                            })?,
+                    );
+                    continue;
+                }
+            }
+            if resume_target.is_some() {
+                return Err(format!(
+                    "Error: 'resume' accepts one session ID or name; quote names with spaces. Unexpected argument: '{argument}'.\n{RESUME_USAGE}"
+                ));
+            }
+            resume_target = Some(argument.into_owned());
+        }
+        if resume_target.as_ref().is_none_or(String::is_empty) {
+            return Err(format!(
+                "Error: 'resume' requires a session ID, name, or 'latest' argument.\n{RESUME_USAGE}"
+            ));
+        }
+    }
     let paths = DataPaths::from_env()?;
     match command.as_str() {
         "" => {
@@ -131,18 +202,60 @@ pub fn run() -> Result<(), String> {
             }
             list(&sessions);
         }
+        "resume" => {
+            let target = resume_target.as_deref().unwrap();
+            let latest = target == "latest";
+            let id_prefix = if latest { None } else { Some(target) };
+            let load_sessions = |id_prefix: Option<&str>| {
+                let Some(agent) = resume_agent else {
+                    return load_session_summaries(&paths, id_prefix);
+                };
+                let mut sessions = provider(agent).load_summaries(&paths, id_prefix)?;
+                sessions.sort_by_key(|session| Reverse(session.last_active_at));
+                Ok(sessions)
+            };
+            let agent_suffix = resume_agent
+                .map(|agent| format!(" for agent '{}'", agent.key()))
+                .unwrap_or_default();
+            let mut sessions = load_sessions(id_prefix)?;
+            if latest {
+                let cwd = env::current_dir().map_err(|error| {
+                    format!("Error: Cannot read the current directory: {error}")
+                })?;
+                retain_current_directory_sessions(&mut sessions, &cwd);
+                if sessions.is_empty() {
+                    return Err(format!(
+                        "Error: No sessions found in the current directory '{}'{}.",
+                        cwd.display(),
+                        agent_suffix
+                    ));
+                }
+            } else if sessions.is_empty() {
+                // keep ID lookups bounded; only load names when no ID prefix matches
+                sessions = load_sessions(None)?;
+                let indices: Vec<_> = (0..sessions.len()).collect();
+                load_session_names(&mut sessions, &indices, &paths);
+                let name = target.to_lowercase();
+                sessions.retain(|session| {
+                    session
+                        .name
+                        .as_ref()
+                        .is_some_and(|session_name| session_name.to_lowercase() == name)
+                });
+            }
+            let session = sessions
+                .first()
+                .ok_or_else(|| format!("Error: Session '{target}' not found{agent_suffix}."))?;
+            resume(session, &paths)?;
+        }
         _ => {
             let id = args[1].to_string_lossy();
             let mut sessions = load_session_summaries(&paths, Some(id.as_ref()))?;
             if sessions.is_empty() {
                 return Err(format!("Error: Session '{id}' not found."));
             }
-            if command == "launch" {
-                resume(&sessions[0], &paths)?;
-            } else {
-                load_session_names(&mut sessions, &[0], &paths);
-                delete(&sessions[0], &paths)?;
-            }
+            load_session_names(&mut sessions, &[0], &paths);
+            delete(&sessions[0], &paths)?;
         }
     }
     Ok(())
